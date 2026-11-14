@@ -13,8 +13,7 @@ Follow-up de clientes e organização de documentos. A aposta é que isso cobre 
 - Lê e-mail e WhatsApp.
 - Separa prazo, pedido e arquivo.
 - Guarda o documento no cliente certo, e no processo quando a mensagem o citar.
-- Deixa o texto do follow-up pronto.
-- Envia só depois que o advogado confirma. Nada sai no meio do ciclo.
+- Deixa o texto do follow-up pronto. O envio só acontece na fila, depois da aprovação.
 
 ## Fonte da verdade
 
@@ -34,6 +33,10 @@ A conta de WhatsApp e a de e-mail podem ser as pessoais. O agente não trata a c
 - E-mail: cliente conhecido pelo endereço do remetente.
 - Número ou remetente novo fica numa fila até o advogado classificar: cliente, prospecção ou pessoal.
 - Conversa pessoal não entra no repositório.
+
+## Segurança
+
+O agente nunca envia mensagem sem a aprovação do advogado. Isso vale para WhatsApp, e-mail e qualquer outro canal. Sem aprovação, a mensagem permanece rascunho. Não há exceção por prazo, ciclo ou confiança no destinatário.
 
 ## Fila do dia
 
