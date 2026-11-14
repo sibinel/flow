@@ -38,6 +38,8 @@ A conta de WhatsApp e a de e-mail podem ser as pessoais. O agente não trata a c
 
 O agente nunca envia mensagem sem a aprovação do advogado. Isso vale para WhatsApp, e-mail e qualquer outro canal. Sem aprovação, a mensagem permanece rascunho. Não há exceção por prazo, ciclo ou confiança no destinatário.
 
+Cada cliente fica isolado. O agente nunca usa informação de um cliente para mostrar ou enviar algo a outro. Não há consulta, exemplo, rascunho ou anexo que cruze dados entre clientes.
+
 ## Fila do dia
 
 Cada ciclo monta a mesma fila:
