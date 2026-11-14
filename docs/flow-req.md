@@ -23,7 +23,7 @@ Um repositório único, na máquina do advogado. A nuvem guarda uma cópia sincr
 
 Cliente é a raiz. Processo só existe ligado a um cliente. Cliente em prospecção pode ficar sem processo até virar caso.
 
-Mensagem cai primeiro no cliente. Se citar um processo, o agente liga nela. Se não citar, fica no cliente até o advogado apontar.
+Mensagem cai primeiro no cliente. Se citar um processo, o agente liga nela. Se não citar, fica pendente até o advogado indicar o processo. O agente não escolhe entre processos do mesmo cliente.
 
 ## Identificação
 
@@ -33,6 +33,7 @@ A conta de WhatsApp e a de e-mail podem ser as pessoais. O agente não trata a c
 - E-mail: cliente conhecido pelo endereço do remetente.
 - Número ou remetente novo fica numa fila até o advogado classificar: cliente, prospecção ou pessoal.
 - Conversa pessoal não entra no repositório.
+- O nome dito na mensagem é o segundo filtro. Se a pessoa se apresenta com um nome diferente do contato ("sou a Maria, do celular do meu marido" ou "sou o João, você não me conhece"), a entrada fica pendente. Não entra na pasta do dono do número ou do e-mail.
 
 ## Segurança
 
