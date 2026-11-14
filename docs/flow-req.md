@@ -26,6 +26,15 @@ Cliente é a raiz. Processo só existe ligado a um cliente. Cliente em prospecç
 
 Mensagem cai primeiro no cliente. Se citar um processo, o agente liga nela. Se não citar, fica no cliente até o advogado apontar.
 
+## Identificação
+
+A conta de WhatsApp e a de e-mail podem ser as pessoais. O agente não trata a caixa inteira como trabalho.
+
+- WhatsApp: cliente conhecido pelo número já cadastrado.
+- E-mail: cliente conhecido pelo endereço do remetente.
+- Número ou remetente novo fica numa fila até o advogado classificar: cliente, prospecção ou pessoal.
+- Conversa pessoal não entra no repositório.
+
 ## Fila do dia
 
 Cada ciclo monta a mesma fila:
