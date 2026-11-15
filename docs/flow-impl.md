@@ -21,10 +21,27 @@ Um pacote por sistema, com o processo Python inteiro dentro. PyInstaller junta P
 
 Documentos e o SQLite ficam na pasta do usuário, fora do pacote. Atualizar o aplicativo não apaga esses dados.
 
+## SQLite
+
+O arquivo do documento fica no disco. O banco guarda o estado e o índice.
+
+- **cliente:** id, nome, status (prospecção ou cliente)
+- **contato:** id, cliente_id, tipo (whatsapp ou email), valor
+- **processo:** id, cliente_id, número, título
+- **entrada:** id, contato_id, processo_id nulo, recebido_em, texto, estado (nova, pendente, arquivada)
+- **documento:** id, entrada_id, caminho no disco, nome
+- **pendencia:** id, entrada_id, motivo (nome diferente, contato novo, processo não citado)
+- **rascunho:** id, entrada_id, texto, estado (aguardando, aprovado, enviado)
+- **envio:** id, rascunho_id, enviado_em, canal
+- **trecho:** id, cliente_id, entrada_id, canal, quando, texto
+
+`processo_id` só é preenchido quando a mensagem cita o processo. Nome diferente ou contato novo não cria cliente: fica pendência. O rascunho só vira envio depois da aprovação.
+
+A busca por tema usa FTS5 na tabela `trecho`. "Quando falei com o João sobre rescisão" acha o cliente e os trechos. O LLM só redige a resposta em cima desses trechos e não lê outro cliente. Texto extraído de documento entra no mesmo índice.
+
 Leitores só entram. Remetente só sai, e só depois da aprovação. Classificador vê um cliente por vez. Nome diferente, contato novo ou processo não citado ficam pendentes. Documento fica no disco. SQLite indexa e guarda o estado. Os quatro componentes usam o banco, sem seta de fluxo até ele.
 
 ## Pontos em aberto
 
-- **LLM:** o que o modelo vê de cada cliente, e o que ele não pode fazer.
-- **SQLite:** como o índice e o estado do fluxo ficam no mesmo arquivo, na pasta local.
+- **LLM:** o que o modelo vê de cada cliente fora da busca, e o que ele não pode fazer.
 - **Leitores e remetente:** como o harness fala com WhatsApp e e-mail sem misturar leitura e envio.
