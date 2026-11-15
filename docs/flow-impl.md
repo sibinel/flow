@@ -43,6 +43,8 @@ Leitores só entram. Remetente só sai, e só depois da aprovação. Classificad
 
 Duas tools separam leitura e envio. A tool de leitura fica no classificador e nos leitores. A tool de envio só é registrada no remetente, e só entra no grafo quando a fila marca o rascunho como aprovado. A conta de WhatsApp ou de e-mail pode ser a mesma. Sem essa tool registrada, o modelo não consegue chamar o envio.
 
+O modelo só vê o cliente da vez, e só o pedaço da tarefa. Na classificação, a mensagem que chegou, o nome do cliente, os contatos dele e a lista de processos (número e título). Não lê o histórico nem outro cliente. Se o processo não aparece no texto, fica pendente: o modelo não escolhe. No rascunho de follow-up e na busca, só os trechos que o FTS5 devolveu daquele cliente, mais a mensagem atual. O modelo redige. Não envia, não cria cliente e não puxa dado de outro.
+
 ## Pontos em aberto
 
-- **LLM:** o que o modelo vê de cada cliente fora da busca, e o que ele não pode fazer.
+Nenhum no momento.
