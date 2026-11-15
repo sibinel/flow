@@ -41,7 +41,8 @@ A busca por tema usa FTS5 na tabela `trecho`. "Quando falei com o João sobre re
 
 Leitores só entram. Remetente só sai, e só depois da aprovação. Classificador vê um cliente por vez. Nome diferente, contato novo ou processo não citado ficam pendentes. Documento fica no disco. SQLite indexa e guarda o estado. Os quatro componentes usam o banco, sem seta de fluxo até ele.
 
+Duas tools separam leitura e envio. A tool de leitura fica no classificador e nos leitores. A tool de envio só é registrada no remetente, e só entra no grafo quando a fila marca o rascunho como aprovado. A conta de WhatsApp ou de e-mail pode ser a mesma. Sem essa tool registrada, o modelo não consegue chamar o envio.
+
 ## Pontos em aberto
 
 - **LLM:** o que o modelo vê de cada cliente fora da busca, e o que ele não pode fazer.
-- **Leitores e remetente:** como o harness fala com WhatsApp e e-mail sem misturar leitura e envio.
