@@ -12,6 +12,15 @@ Um processo Python, em Windows e macOS.
 - **Controller:** a fronteira entre a janela e o resto. A janela só fala com ele.
 - **Agent harness:** LangGraph, com tools, estado e sessão. Leitores, classificador, fila, remetente, SQLite e o LLM ficam aqui.
 
+## Instalável
+
+Um pacote por sistema, com o processo Python inteiro dentro. PyInstaller junta Python, Qt, QML e LangGraph. O advogado não instala Python.
+
+- macOS: um `.app` distribuído em `.dmg`.
+- Windows: um `.exe` distribuído por um instalador.
+
+Documentos e o SQLite ficam na pasta do usuário, fora do pacote. Atualizar o aplicativo não apaga esses dados.
+
 Leitores só entram. Remetente só sai, e só depois da aprovação. Classificador vê um cliente por vez. Nome diferente, contato novo ou processo não citado ficam pendentes. Documento fica no disco. SQLite indexa e guarda o estado. Os quatro componentes usam o banco, sem seta de fluxo até ele.
 
 ## Pontos em aberto
