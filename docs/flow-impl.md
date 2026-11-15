@@ -28,14 +28,14 @@ O arquivo do documento fica no disco. O banco guarda o estado e o índice.
 - **cliente:** id, nome, status (prospecção ou cliente)
 - **contato:** id, cliente_id, tipo (whatsapp ou email), valor
 - **processo:** id, cliente_id, número, título
-- **entrada:** id, contato_id, processo_id nulo, recebido_em, texto, estado (nova, pendente, arquivada)
+- **entrada:** id, cliente_id nulo, contato_id, processo_id nulo, recebido_em, texto, estado (nova, pendente, arquivada)
 - **documento:** id, entrada_id, caminho no disco, nome
 - **pendencia:** id, entrada_id, motivo (nome diferente, contato novo, processo não citado)
 - **rascunho:** id, entrada_id, texto, estado (aguardando, aprovado, enviado)
 - **envio:** id, rascunho_id, enviado_em, canal
 - **trecho:** id, cliente_id, entrada_id, canal, quando, texto
 
-`processo_id` só é preenchido quando a mensagem cita o processo. Nome diferente ou contato novo não cria cliente: fica pendência. O rascunho só vira envio depois da aprovação.
+`cliente_id` fica nulo enquanto a entrada está pendente de classificação. `contato_id` aponta o canal por onde chegou, número ou e-mail, e pode ser de outra pessoa. Não se arquiva pelo dono do canal. `processo_id` só é preenchido quando a mensagem cita o processo. Nome diferente ou contato novo não cria cliente: fica pendência. O rascunho só vira envio depois da aprovação.
 
 A busca por tema usa FTS5 na tabela `trecho`. "Quando falei com o João sobre rescisão" acha o cliente e os trechos. O LLM só redige a resposta em cima desses trechos e não lê outro cliente. Texto extraído de documento entra no mesmo índice.
 

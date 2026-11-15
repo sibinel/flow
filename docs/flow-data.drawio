@@ -13,8 +13,8 @@
         <mxCell id="processo" value="processo&#10;id&#10;cliente_id&#10;número&#10;título" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1c1917;align=left;spacingLeft=8;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="280" y="200" width="180" height="110" as="geometry"/>
         </mxCell>
-        <mxCell id="entrada" value="entrada&#10;id&#10;contato_id&#10;processo_id nulo&#10;recebido_em&#10;texto&#10;estado" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#9a3412;align=left;spacingLeft=8;fontSize=13;" vertex="1" parent="1">
-          <mxGeometry x="160" y="380" width="200" height="140" as="geometry"/>
+        <mxCell id="entrada" value="entrada&#10;id&#10;cliente_id nulo&#10;contato_id&#10;processo_id nulo&#10;recebido_em&#10;texto&#10;estado" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff7ed;strokeColor=#9a3412;align=left;spacingLeft=8;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="150" y="370" width="220" height="160" as="geometry"/>
         </mxCell>
         <mxCell id="documento" value="documento&#10;id&#10;entrada_id&#10;caminho&#10;nome" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1c1917;align=left;spacingLeft=8;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="40" y="580" width="180" height="100" as="geometry"/>
@@ -33,7 +33,9 @@
         </mxCell>
         <mxCell id="e1" style="endArrow=block;html=1;strokeColor=#1c1917;" edge="1" parent="1" source="cliente" target="contato"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e2" style="endArrow=block;html=1;strokeColor=#1c1917;" edge="1" parent="1" source="cliente" target="processo"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e3" style="endArrow=block;html=1;strokeColor=#1c1917;" edge="1" parent="1" source="contato" target="entrada"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="endArrow=block;html=1;strokeColor=#1c1917;" edge="1" parent="1" source="cliente" target="entrada"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3b" style="endArrow=open;dashed=1;html=1;strokeColor=#a8a29e;" edge="1" parent="1" source="entrada" target="contato"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3bl" value="referência" style="edgeLabel;html=1;fontSize=11;fontColor=#78716c;" vertex="1" connectable="0" parent="e3b"><mxGeometry relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry></mxCell>
         <mxCell id="e4" style="endArrow=open;dashed=1;html=1;strokeColor=#a8a29e;" edge="1" parent="1" source="processo" target="entrada"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e4l" value="opcional" style="edgeLabel;html=1;fontSize=11;fontColor=#78716c;" vertex="1" connectable="0" parent="e4"><mxGeometry relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry></mxCell>
         <mxCell id="e5" style="endArrow=block;html=1;strokeColor=#1c1917;" edge="1" parent="1" source="entrada" target="documento"><mxGeometry relative="1" as="geometry"/></mxCell>
