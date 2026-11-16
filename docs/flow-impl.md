@@ -45,6 +45,12 @@ Duas tools separam leitura e envio. A tool de leitura fica no classificador e no
 
 O modelo só vê o cliente da vez, e só o pedaço da tarefa. Na classificação, a mensagem que chegou, o nome do cliente, os contatos dele e a lista de processos (número e título). Não lê o histórico nem outro cliente. Se o processo não aparece no texto, fica pendente: o modelo não escolhe. No rascunho de follow-up e na busca, só os trechos que o FTS5 devolveu daquele cliente, mais a mensagem atual. O modelo redige. Não envia, não cria cliente e não puxa dado de outro.
 
+O LLM fica na nuvem e fala o padrão OpenAI. O texto do cliente sai da máquina só nessa chamada.
+
+E-mail entra e sai por IMAP. WhatsApp usa sessão Web pelo Baileys, na conta pessoal, sem a API da Meta. O advogado escaneia o QR uma vez. A sessão fica no disco, fora do pacote, e não entra na pasta sincronizada. Sem a sessão, leitura e envio param até um QR novo.
+
+A nuvem não é um serviço do flow. OneDrive, Google Drive ou equivalente sincroniza a pasta de documentos e o SQLite. Backup físico fica fora desta versão. A sessão do WhatsApp não vai nessa cópia.
+
 ## Pontos em aberto
 
 Nenhum no momento.
