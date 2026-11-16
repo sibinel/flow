@@ -47,7 +47,7 @@ O modelo só vê o cliente da vez, e só o pedaço da tarefa. Na classificação
 
 O LLM fica na nuvem e fala o padrão OpenAI. O texto do cliente sai da máquina só nessa chamada.
 
-E-mail entra e sai por IMAP. WhatsApp usa sessão Web pelo Baileys, na conta pessoal, sem a API da Meta. O advogado escaneia o QR uma vez. A sessão fica no disco, fora do pacote, e não entra na pasta sincronizada. Sem a sessão, leitura e envio param até um QR novo.
+E-mail entra por IMAP e sai por SMTP. WhatsApp usa sessão Web pelo Baileys, na conta pessoal, sem a API da Meta. O advogado escaneia o QR uma vez. A sessão fica no disco, fora do pacote, e não entra na pasta sincronizada. Sem a sessão, leitura e envio param até um QR novo.
 
 A nuvem não é um serviço do flow. OneDrive, Google Drive ou equivalente sincroniza a pasta de documentos e o SQLite. Backup físico fica fora desta versão. A sessão do WhatsApp não vai nessa cópia.
 
