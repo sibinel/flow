@@ -5,10 +5,12 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: window
     visible: true
-    width: 960
-    height: 640
+    width: 1080
+    height: 720
+    minimumWidth: 960
+    minimumHeight: 640
     title: "flow"
-    color: "#f7f5f2"
+    color: "#141210"
 
     property int selectedEntry: -1
 
@@ -20,152 +22,321 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 28
-        spacing: 20
+        anchors.margins: 32
+        spacing: 24
 
-        Label {
-            text: "fila"
-            font.pixelSize: 22
-            color: "#1c1917"
+        ColumnLayout {
+            spacing: 6
+            Layout.fillWidth: true
+
+            Label {
+                text: "flow"
+                color: "#a8a29e"
+                font.pixelSize: 13
+                font.letterSpacing: 0.6
+            }
+            Label {
+                text: "Fila do dia"
+                color: "#fafaf9"
+                font.pixelSize: 28
+                font.weight: Font.Medium
+            }
+            Label {
+                text: "Aprove o texto do follow-up ou indique a quem pertence a pendência."
+                color: "#a8a29e"
+                font.pixelSize: 15
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
         }
 
-        RowLayout {
+        GridLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 28
+            columns: 2
+            columnSpacing: 20
+            rowSpacing: 20
 
-            ColumnLayout {
+            Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 8
+                Layout.minimumHeight: 260
+                radius: 16
+                color: "#1c1917"
+                clip: true
 
-                Label {
-                    text: "follow-up para aprovar"
-                    color: "#1c1917"
-                }
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 20
+                    spacing: 14
 
-                ListView {
-                    id: draftsView
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    spacing: 8
-                    model: controller.drafts
-
-                    delegate: Rectangle {
-                        required property int draftId
-                        required property string text
-                        width: draftsView.width
-                        implicitHeight: draftRow.implicitHeight + 16
-                        radius: 8
-                        color: "#ffffff"
-                        border.color: "#e7e5e4"
-
-                        RowLayout {
-                            id: draftRow
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.margins: 8
-                            Label {
-                                text: text
-                                color: "#1c1917"
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                            }
-                            Button {
-                                text: "aprovar"
-                                onClicked: controller.approve(draftId)
-                            }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            text: "Rascunhos"
+                            color: "#fafaf9"
+                            font.pixelSize: 18
+                            font.weight: Font.Medium
+                        }
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            text: draftsView.count
+                            color: "#a8a29e"
+                            font.pixelSize: 14
                         }
                     }
-                }
+                    Label {
+                        text: "Textos aguardando a sua aprovação."
+                        color: "#a8a29e"
+                        font.pixelSize: 13
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
 
-                Label {
-                    visible: draftsView.count === 0
-                    text: "nenhum rascunho aguardando"
-                    color: "#78716c"
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 96
+                        implicitHeight: 96
+
+                        ListView {
+                            id: draftsView
+                            anchors.fill: parent
+                            clip: true
+                            spacing: 10
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: controller.drafts
+
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                            delegate: Rectangle {
+                                id: draftCard
+                                required property int draftId
+                                required property string text
+                                width: draftsView.width
+                                implicitHeight: Math.max(draftRow.implicitHeight + 20, 64)
+                                radius: 10
+                                color: draftHover.hovered ? "#32302e" : "#292524"
+                                border.color: "#44403c"
+
+                                HoverHandler { id: draftHover }
+
+                                RowLayout {
+                                    id: draftRow
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.margins: 12
+                                    spacing: 16
+
+                                    Label {
+                                        text: draftCard.text
+                                        color: "#fafaf9"
+                                        font.pixelSize: 15
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+                                    Button {
+                                        text: "Aprovar"
+                                        implicitHeight: 40
+                                        leftPadding: 18
+                                        rightPadding: 18
+                                        font.pixelSize: 14
+                                        font.capitalization: Font.MixedCase
+                                        onClicked: controller.approve(draftId)
+                                        contentItem: Text {
+                                            text: parent.text
+                                            font: parent.font
+                                            color: "#f7fee7"
+                                            horizontalAlignment: Text.AlignHCenter
+                                            verticalAlignment: Text.AlignVCenter
+                                        }
+                                        background: Rectangle {
+                                            radius: 8
+                                            color: parent.down ? "#365314" : parent.hovered ? "#4d7c0f" : "#3f6212"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Label {
+                            anchors.centerIn: parent
+                            width: Math.min(parent.width - 32, 360)
+                            visible: draftsView.count === 0
+                            text: "Nenhum rascunho aguardando aprovação."
+                            color: "#a8a29e"
+                            font.pixelSize: 15
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                        }
+                    }
                 }
             }
 
-            ColumnLayout {
+            Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 8
+                Layout.minimumHeight: 320
+                radius: 16
+                color: "#1c1917"
+                clip: true
 
-                Label {
-                    text: "pendência para indicar"
-                    color: "#1c1917"
-                }
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 20
+                    spacing: 14
 
-                ListView {
-                    id: pendingsView
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
-                    clip: true
-                    spacing: 8
-                    model: controller.pendings
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            text: "Pendências"
+                            color: "#fafaf9"
+                            font.pixelSize: 18
+                            font.weight: Font.Medium
+                        }
+                        Item { Layout.fillWidth: true }
+                        Label {
+                            text: pendingsView.count
+                            color: "#a8a29e"
+                            font.pixelSize: 14
+                        }
+                    }
+                    Label {
+                        text: "Escolha uma e indique o cliente. O processo entra quando couber."
+                        color: "#a8a29e"
+                        font.pixelSize: 13
+                        wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
 
-                    delegate: Rectangle {
-                        required property int entryId
-                        required property string text
-                        required property string reason
-                        width: pendingsView.width
-                        implicitHeight: pendingText.implicitHeight + 20
-                        radius: 8
-                        color: window.selectedEntry === entryId ? "#fef9c3" : "#ffffff"
-                        border.color: "#e7e5e4"
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 96
+                        implicitHeight: 96
+
+                        ListView {
+                            id: pendingsView
+                            anchors.fill: parent
+                            clip: true
+                            spacing: 10
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: controller.pendings
+
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                            delegate: Rectangle {
+                                id: pendingCard
+                                required property int entryId
+                                required property string text
+                                required property string reason
+                                width: pendingsView.width
+                                implicitHeight: Math.max(pendingText.implicitHeight + 24, 64)
+                                radius: 10
+                                color: window.selectedEntry === entryId ? "#3f2e14" : pendingHover.hovered ? "#32302e" : "#292524"
+                                border.color: window.selectedEntry === entryId ? "#a16207" : "#44403c"
+                                border.width: window.selectedEntry === entryId ? 1.5 : 1
+
+                                HoverHandler { id: pendingHover }
+
+                                Column {
+                                    id: pendingText
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.margins: 12
+                                    spacing: 4
+
+                                    Label {
+                                        width: parent.width
+                                        text: pendingCard.text
+                                        color: "#fafaf9"
+                                        font.pixelSize: 15
+                                        wrapMode: Text.WordWrap
+                                    }
+                                    Label {
+                                        width: parent.width
+                                        visible: reason !== ""
+                                        text: reason
+                                        color: "#d6d3d1"
+                                        font.pixelSize: 13
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: window.selectedEntry = entryId
+                                }
+                            }
+                        }
 
                         Label {
-                            id: pendingText
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.margins: 10
-                            text: reason === "" ? text : text + " — " + reason
-                            color: "#1c1917"
+                            anchors.centerIn: parent
+                            width: Math.min(parent.width - 32, 360)
+                            visible: pendingsView.count === 0
+                            text: "Nenhuma pendência para indicar."
+                            color: "#a8a29e"
+                            font.pixelSize: 15
+                            horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
                         }
+                    }
 
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: window.selectedEntry = entryId
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Label {
+                            text: "Cliente"
+                            color: "#d6d3d1"
+                            font.pixelSize: 13
                         }
-                    }
-                }
+                        ComboBox {
+                            id: clients
+                            Layout.fillWidth: true
+                            implicitHeight: 42
+                            model: controller.clients
+                            textRole: "name"
+                            valueRole: "clientId"
+                            font.pixelSize: 14
+                            onCountChanged: if (count > 0 && currentIndex < 0) currentIndex = 0
+                            onCurrentValueChanged: {
+                                if (currentValue !== undefined)
+                                    controller.selectClient(currentValue)
+                            }
+                        }
 
-                Label {
-                    visible: pendingsView.count === 0
-                    text: "nenhuma pendência"
-                    color: "#78716c"
-                }
+                        Label {
+                            text: "Processo"
+                            color: "#d6d3d1"
+                            font.pixelSize: 13
+                        }
+                        ComboBox {
+                            id: processes
+                            Layout.fillWidth: true
+                            implicitHeight: 42
+                            model: controller.processes
+                            textRole: "label"
+                            valueRole: "processId"
+                            font.pixelSize: 14
+                            onCountChanged: if (count > 0 && currentIndex < 0) currentIndex = 0
+                        }
 
-                ComboBox {
-                    id: clients
-                    Layout.fillWidth: true
-                    model: controller.clients
-                    textRole: "name"
-                    valueRole: "clientId"
-                    onCurrentValueChanged: {
-                        if (currentValue !== undefined)
-                            controller.selectClient(currentValue)
-                    }
-                }
-
-                ComboBox {
-                    id: processes
-                    Layout.fillWidth: true
-                    model: controller.processes
-                    textRole: "label"
-                    valueRole: "processId"
-                }
-
-                Button {
-                    text: "indicar"
-                    enabled: window.selectedEntry >= 0 && clients.currentIndex >= 0
-                    onClicked: {
-                        if (controller.indicate(window.selectedEntry, clients.currentValue, window.processChoice()))
-                            window.selectedEntry = -1
+                        Button {
+                            text: "Indicar"
+                            Layout.fillWidth: true
+                            implicitHeight: 40
+                            font.pixelSize: 14
+                            font.capitalization: Font.MixedCase
+                            enabled: window.selectedEntry >= 0 && clients.currentIndex >= 0
+                            onClicked: {
+                                if (controller.indicate(window.selectedEntry, clients.currentValue, window.processChoice()))
+                                    window.selectedEntry = -1
+                            }
+                        }
                     }
                 }
             }
