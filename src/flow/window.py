@@ -1,4 +1,4 @@
-"""Sobe o processo: uma janela QML vazia ligada só ao controller."""
+"""Sobe o processo: a fila em QML, ligada só ao controller."""
 
 from __future__ import annotations
 
