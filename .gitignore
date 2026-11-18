@@ -5,3 +5,7 @@ dist/
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
