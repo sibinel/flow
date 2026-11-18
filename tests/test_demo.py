@@ -64,7 +64,7 @@ class DemoQueueTest(unittest.TestCase):
         self.assertEqual(processes[0]["título"], "Rescisão")
         self.assertEqual(sent, 0)
 
-    def test_skips_a_queue_that_already_has_items(self) -> None:
+    def test_fills_missing_examples_beside_an_existing_item(self) -> None:
         with open_database(self.data) as connection:
             client = connection.execute(
                 "INSERT INTO cliente (nome, status) VALUES ('Escritório', 'cliente')"
@@ -90,8 +90,44 @@ class DemoQueueTest(unittest.TestCase):
             )
             connection.commit()
             ensure_demo(connection)
-            names = connection.execute("SELECT nome FROM cliente").fetchall()
-        self.assertEqual([row["nome"] for row in names], ["Escritório"])
+            ensure_demo(connection)
+            drafts = connection.execute(
+                "SELECT texto FROM rascunho WHERE estado = 'aguardando' ORDER BY id"
+            ).fetchall()
+            sent = connection.execute("SELECT COUNT(*) FROM envio").fetchone()[0]
+        self.assertEqual(len(drafts), 3)
+        self.assertEqual(drafts[0]["texto"], "texto que já estava na fila")
+        self.assertEqual(sent, 0)
+
+    def test_puts_existing_demo_texts_back_on_the_queue(self) -> None:
+        with open_database(self.data) as connection:
+            ensure_demo(connection)
+            connection.execute(
+                "UPDATE rascunho SET estado = 'aprovado' WHERE texto LIKE 'Ana,%'"
+            )
+            connection.execute(
+                """
+                UPDATE entrada
+                SET estado = 'arquivada', cliente_id = (
+                    SELECT id FROM cliente WHERE nome = 'Bruno Dias'
+                )
+                WHERE texto LIKE 'Sou a Maria%'
+                """
+            )
+            connection.commit()
+            ensure_demo(connection)
+            drafts = connection.execute(
+                "SELECT estado FROM rascunho WHERE texto LIKE 'Ana,%'"
+            ).fetchall()
+            pending = connection.execute(
+                "SELECT estado, cliente_id FROM entrada WHERE texto LIKE 'Sou a Maria%'"
+            ).fetchone()
+            sent = connection.execute("SELECT COUNT(*) FROM envio").fetchone()[0]
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(drafts[0]["estado"], "aguardando")
+        self.assertEqual(pending["estado"], "pendente")
+        self.assertIsNone(pending["cliente_id"])
+        self.assertEqual(sent, 0)
 
     def test_controller_with_a_given_folder_stays_empty(self) -> None:
         controller = Controller(self.data)

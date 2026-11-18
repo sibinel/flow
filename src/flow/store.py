@@ -113,88 +113,133 @@ def open_database(data_dir: Path) -> sqlite3.Connection:
     return connection
 
 
-def ensure_demo(connection: sqlite3.Connection) -> None:
-    """Preenche a fila vazia uma vez. Não cria envio nem repete os exemplos."""
-    queued = connection.execute(
-        """
-        SELECT
-            (SELECT COUNT(*) FROM rascunho WHERE estado = 'aguardando')
-          + (SELECT COUNT(*) FROM entrada WHERE estado = 'pendente')
-        """
-    ).fetchone()[0]
-    if queued:
-        return
-    if connection.execute(
-        "SELECT 1 FROM cliente WHERE nome = ?",
-        ("Ana Lima",),
-    ).fetchone():
-        return
+_DEMO_CLIENTS = (
+    ("Ana Lima", "cliente"),
+    ("Bruno Dias", "cliente"),
+    ("Carla Nunes", "prospecção"),
+)
+_DEMO_DRAFTS = (
+    ("Ana Lima", "email", "ana.lima@email.com", "Ana, o contrato chegou. Confirmo o recebimento?"),
+    ("Bruno Dias", "whatsapp", "+5511987654321", "Bruno, a petição da rescisão está pronta. Posso enviar?"),
+)
+_DEMO_PENDINGS = (
+    ("Bruno Dias", "whatsapp", "+5511987654321", "Sou a Maria, do celular do meu marido.", "nome diferente"),
+    ("Ana Lima", "email", "ana.lima@email.com", "Segue o contrato assinado para arquivar.", "processo não citado"),
+)
 
-    ana = connection.execute(
-        "INSERT INTO cliente (nome, status) VALUES ('Ana Lima', 'cliente')"
-    ).lastrowid
-    bruno = connection.execute(
-        "INSERT INTO cliente (nome, status) VALUES ('Bruno Dias', 'cliente')"
-    ).lastrowid
-    connection.execute(
-        "INSERT INTO cliente (nome, status) VALUES ('Carla Nunes', 'prospecção')"
+
+def _row_id(connection: sqlite3.Connection, sql: str, params: tuple) -> int:
+    found = connection.execute(sql, params).fetchone()
+    return int(found["id"]) if found else 0
+
+
+def _client_id(connection: sqlite3.Connection, nome: str, status: str) -> int:
+    found = _row_id(connection, "SELECT id FROM cliente WHERE nome = ?", (nome,))
+    if found:
+        return found
+    return int(
+        connection.execute(
+            "INSERT INTO cliente (nome, status) VALUES (?, ?)",
+            (nome, status),
+        ).lastrowid
     )
-    ana_mail = connection.execute(
-        "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'email', 'ana.lima@email.com')",
-        (ana,),
-    ).lastrowid
-    bruno_phone = connection.execute(
-        "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'whatsapp', '+5511987654321')",
-        (bruno,),
-    ).lastrowid
-    connection.execute(
-        'INSERT INTO processo (cliente_id, "número", "título") VALUES (?, ?, ?)',
-        (bruno, "1001234-55.2024.8.26.0100", "Rescisão"),
+
+
+def _contact_id(connection: sqlite3.Connection, client_id: int, tipo: str, valor: str) -> int:
+    found = _row_id(
+        connection,
+        "SELECT id FROM contato WHERE cliente_id = ? AND valor = ?",
+        (client_id, valor),
     )
-    ana_entry = connection.execute(
-        """
-        INSERT INTO entrada (
-            cliente_id, contato_id, processo_id, recebido_em, texto, estado
-        ) VALUES (?, ?, NULL, '2026-11-18T09:00:00', ?, 'nova')
-        """,
-        (ana, ana_mail, "O contrato chegou."),
-    ).lastrowid
-    bruno_entry = connection.execute(
-        """
-        INSERT INTO entrada (
-            cliente_id, contato_id, processo_id, recebido_em, texto, estado
-        ) VALUES (?, ?, NULL, '2026-11-18T09:10:00', ?, 'nova')
-        """,
-        (bruno, bruno_phone, "A petição da rescisão ficou pronta."),
-    ).lastrowid
-    connection.execute(
-        """
-        INSERT INTO rascunho (entrada_id, texto, estado) VALUES
-            (?, 'Ana, o contrato chegou. Confirmo o recebimento?', 'aguardando'),
-            (?, 'Bruno, a petição da rescisão está pronta. Posso enviar?', 'aguardando')
-        """,
-        (ana_entry, bruno_entry),
+    if found:
+        return found
+    return int(
+        connection.execute(
+            "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, ?, ?)",
+            (client_id, tipo, valor),
+        ).lastrowid
     )
-    maria = connection.execute(
-        """
-        INSERT INTO entrada (
-            cliente_id, contato_id, processo_id, recebido_em, texto, estado
-        ) VALUES (NULL, ?, NULL, '2026-11-18T09:20:00', ?, 'pendente')
-        """,
-        (bruno_phone, "Sou a Maria, do celular do meu marido."),
-    ).lastrowid
-    contrato = connection.execute(
-        """
-        INSERT INTO entrada (
-            cliente_id, contato_id, processo_id, recebido_em, texto, estado
-        ) VALUES (NULL, ?, NULL, '2026-11-18T09:30:00', ?, 'pendente')
-        """,
-        (ana_mail, "Segue o contrato assinado para arquivar."),
-    ).lastrowid
-    connection.execute(
-        "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, 'nome diferente'), (?, 'processo não citado')",
-        (maria, contrato),
-    )
+
+
+def ensure_demo(connection: sqlite3.Connection) -> None:
+    """Inclui os exemplos que faltam. Não cria envio nem repete um texto."""
+    clients = {
+        nome: _client_id(connection, nome, status) for nome, status in _DEMO_CLIENTS
+    }
+    bruno = clients["Bruno Dias"]
+    if not connection.execute(
+        'SELECT 1 FROM processo WHERE cliente_id = ? AND "número" = ?',
+        (bruno, "1001234-55.2024.8.26.0100"),
+    ).fetchone():
+        connection.execute(
+            'INSERT INTO processo (cliente_id, "número", "título") VALUES (?, ?, ?)',
+            (bruno, "1001234-55.2024.8.26.0100", "Rescisão"),
+        )
+    for nome, tipo, valor, texto in _DEMO_DRAFTS:
+        found = connection.execute(
+            "SELECT id, estado FROM rascunho WHERE texto = ?",
+            (texto,),
+        ).fetchone()
+        if found:
+            if found["estado"] != "aguardando":
+                connection.execute(
+                    "UPDATE rascunho SET estado = 'aguardando' WHERE id = ?",
+                    (found["id"],),
+                )
+            continue
+        contact = _contact_id(connection, clients[nome], tipo, valor)
+        entry = connection.execute(
+            """
+            INSERT INTO entrada (
+                cliente_id, contato_id, processo_id, recebido_em, texto, estado
+            ) VALUES (?, ?, NULL, '2026-11-18T09:00:00', ?, 'nova')
+            """,
+            (clients[nome], contact, texto),
+        ).lastrowid
+        connection.execute(
+            """
+            INSERT INTO rascunho (entrada_id, texto, estado)
+            VALUES (?, ?, 'aguardando')
+            """,
+            (entry, texto),
+        )
+    for nome, tipo, valor, texto, motivo in _DEMO_PENDINGS:
+        found = connection.execute(
+            "SELECT id, estado FROM entrada WHERE texto = ?",
+            (texto,),
+        ).fetchone()
+        if found:
+            if found["estado"] != "pendente":
+                connection.execute(
+                    """
+                    UPDATE entrada
+                    SET estado = 'pendente', cliente_id = NULL, processo_id = NULL
+                    WHERE id = ?
+                    """,
+                    (found["id"],),
+                )
+            if not connection.execute(
+                "SELECT 1 FROM pendencia WHERE entrada_id = ? AND motivo = ?",
+                (found["id"], motivo),
+            ).fetchone():
+                connection.execute(
+                    "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, ?)",
+                    (found["id"], motivo),
+                )
+            continue
+        contact = _contact_id(connection, clients[nome], tipo, valor)
+        entry = connection.execute(
+            """
+            INSERT INTO entrada (
+                cliente_id, contato_id, processo_id, recebido_em, texto, estado
+            ) VALUES (NULL, ?, NULL, '2026-11-18T09:20:00', ?, 'pendente')
+            """,
+            (contact, texto),
+        ).lastrowid
+        connection.execute(
+            "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, ?)",
+            (entry, motivo),
+        )
     connection.commit()
 
 
