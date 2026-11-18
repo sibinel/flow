@@ -8,7 +8,7 @@ from PySide6.QtCore import Property, QObject, Slot
 
 from flow.paths import ensure_user_data
 from flow.queue import RecordModel
-from flow.store import database_file, open_database
+from flow.store import database_file, ensure_demo, open_database
 
 
 class Controller(QObject):
@@ -16,6 +16,8 @@ class Controller(QObject):
         super().__init__()
         self._data_dir = ensure_user_data(data_root)
         self._db = open_database(self._data_dir)
+        if data_root is None:
+            ensure_demo(self._db)
         self._drafts = RecordModel(["draftId", "text"])
         self._pendings = RecordModel(["entryId", "text", "reason"])
         self._clients = RecordModel(["clientId", "name"])

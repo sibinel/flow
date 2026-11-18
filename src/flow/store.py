@@ -113,6 +113,91 @@ def open_database(data_dir: Path) -> sqlite3.Connection:
     return connection
 
 
+def ensure_demo(connection: sqlite3.Connection) -> None:
+    """Preenche a fila vazia uma vez. Não cria envio nem repete os exemplos."""
+    queued = connection.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM rascunho WHERE estado = 'aguardando')
+          + (SELECT COUNT(*) FROM entrada WHERE estado = 'pendente')
+        """
+    ).fetchone()[0]
+    if queued:
+        return
+    if connection.execute(
+        "SELECT 1 FROM cliente WHERE nome = ?",
+        ("Ana Lima",),
+    ).fetchone():
+        return
+
+    ana = connection.execute(
+        "INSERT INTO cliente (nome, status) VALUES ('Ana Lima', 'cliente')"
+    ).lastrowid
+    bruno = connection.execute(
+        "INSERT INTO cliente (nome, status) VALUES ('Bruno Dias', 'cliente')"
+    ).lastrowid
+    connection.execute(
+        "INSERT INTO cliente (nome, status) VALUES ('Carla Nunes', 'prospecção')"
+    )
+    ana_mail = connection.execute(
+        "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'email', 'ana.lima@email.com')",
+        (ana,),
+    ).lastrowid
+    bruno_phone = connection.execute(
+        "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'whatsapp', '+5511987654321')",
+        (bruno,),
+    ).lastrowid
+    connection.execute(
+        'INSERT INTO processo (cliente_id, "número", "título") VALUES (?, ?, ?)',
+        (bruno, "1001234-55.2024.8.26.0100", "Rescisão"),
+    )
+    ana_entry = connection.execute(
+        """
+        INSERT INTO entrada (
+            cliente_id, contato_id, processo_id, recebido_em, texto, estado
+        ) VALUES (?, ?, NULL, '2026-11-18T09:00:00', ?, 'nova')
+        """,
+        (ana, ana_mail, "O contrato chegou."),
+    ).lastrowid
+    bruno_entry = connection.execute(
+        """
+        INSERT INTO entrada (
+            cliente_id, contato_id, processo_id, recebido_em, texto, estado
+        ) VALUES (?, ?, NULL, '2026-11-18T09:10:00', ?, 'nova')
+        """,
+        (bruno, bruno_phone, "A petição da rescisão ficou pronta."),
+    ).lastrowid
+    connection.execute(
+        """
+        INSERT INTO rascunho (entrada_id, texto, estado) VALUES
+            (?, 'Ana, o contrato chegou. Confirmo o recebimento?', 'aguardando'),
+            (?, 'Bruno, a petição da rescisão está pronta. Posso enviar?', 'aguardando')
+        """,
+        (ana_entry, bruno_entry),
+    )
+    maria = connection.execute(
+        """
+        INSERT INTO entrada (
+            cliente_id, contato_id, processo_id, recebido_em, texto, estado
+        ) VALUES (NULL, ?, NULL, '2026-11-18T09:20:00', ?, 'pendente')
+        """,
+        (bruno_phone, "Sou a Maria, do celular do meu marido."),
+    ).lastrowid
+    contrato = connection.execute(
+        """
+        INSERT INTO entrada (
+            cliente_id, contato_id, processo_id, recebido_em, texto, estado
+        ) VALUES (NULL, ?, NULL, '2026-11-18T09:30:00', ?, 'pendente')
+        """,
+        (ana_mail, "Segue o contrato assinado para arquivar."),
+    ).lastrowid
+    connection.execute(
+        "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, 'nome diferente'), (?, 'processo não citado')",
+        (maria, contrato),
+    )
+    connection.commit()
+
+
 def search_trechos(connection: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
     return list(
         connection.execute(
