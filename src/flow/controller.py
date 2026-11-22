@@ -9,6 +9,7 @@ from PySide6.QtCore import Property, QObject, Slot
 from flow.classify import Classifier, ReadTool
 from flow.mail import ImapReader
 from flow.paths import ensure_user_data
+from flow.send import SmtpSender
 from flow.queue import RecordModel
 from flow.store import database_file, ensure_demo, open_database
 
@@ -132,6 +133,15 @@ class Controller(QObject):
         self._db.commit()
         self._reload()
         return entry_ids
+
+    def send_approved_mail(self, draft_id: int, host: str, port: int, sender: str) -> bool:
+        """Envia só rascunho aprovado. Sem aprovação, a tool de envio não entra."""
+        sender_tool = SmtpSender(self._db)
+        if not sender_tool.send(draft_id, host, port, sender):
+            return False
+        self._db.commit()
+        self._reload()
+        return True
 
     def classify_entry(self, entry_id: int) -> str:
         """Classifica uma entrada. A janela não chama este método."""

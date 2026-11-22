@@ -1,14 +1,14 @@
 {
-  "commit": "62bfe20e0646ad09c23ca0066e34835817aa2de4",
-  "abbreviated_commit": "62bfe20",
-  "tree": "a7c2ffa527487929db716ee98df712d19a2ca1d4",
-  "abbreviated_tree": "a7c2ffa",
-  "parent": "c19519ac5a65cbf15e4b25d1710d0e821124b6e4",
-  "abbreviated_parent": "c19519a",
+  "commit": "6896dfa5f9e69a2cb0d80d31b5d649650f54e72b",
+  "abbreviated_commit": "6896dfa",
+  "tree": "e0434d5f255df5d1ca850f26e3282ce1e56863f5",
+  "abbreviated_tree": "e0434d5",
+  "parent": "551ca4f70d7c6883de919544ad5fa04a7ffdbe32",
+  "abbreviated_parent": "551ca4f",
   "refs": "HEAD -> main",
   "encoding": "",
-  "subject": "grok: leitor IMAP só grava entrada e documento",
-  "sanitized_subject_line": "grok-leitor-IMAP-s-grava-entrada-e-documento",
+  "subject": "grok: remetente SMTP só depois da aprovação",
+  "sanitized_subject_line": "grok-remetente-SMTP-s-depois-da-aprova-o",
   "body": "",
   "commit_notes": "",
   "verification_flag": "N",
@@ -17,11 +17,11 @@
   "author": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Sun, 22 Nov 2026 14:19:01 -0300"
+    "date": "Sun, 22 Nov 2026 14:32:05 -0300"
   },
   "commiter": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Sun, 22 Nov 2026 14:19:01 -0300"
+    "date": "Sun, 22 Nov 2026 14:32:05 -0300"
   }
 }

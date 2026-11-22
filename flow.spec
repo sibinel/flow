@@ -20,6 +20,7 @@ a = Analysis(
         "flow.queue",
         "flow.classify",
         "flow.mail",
+        "flow.send",
     ],
     hookspath=[],
     hooksconfig={},
