@@ -19,6 +19,7 @@ a = Analysis(
         "flow.store",
         "flow.queue",
         "flow.classify",
+        "flow.mail",
     ],
     hookspath=[],
     hooksconfig={},
