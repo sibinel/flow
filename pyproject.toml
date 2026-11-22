@@ -23,4 +23,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-flow = ["qml/Main.qml"]
+flow = ["qml/Main.qml", "baileys/bridge.mjs", "baileys/package.json"]

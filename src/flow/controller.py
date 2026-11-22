@@ -10,6 +10,7 @@ from flow.classify import Classifier, ReadTool
 from flow.mail import ImapReader
 from flow.paths import ensure_user_data
 from flow.send import SmtpSender
+from flow.whatsapp import WhatsAppReader, WhatsAppSender, pair
 from flow.queue import RecordModel
 from flow.store import database_file, ensure_demo, open_database
 
@@ -142,6 +143,26 @@ class Controller(QObject):
         self._db.commit()
         self._reload()
         return True
+
+    def ingest_whatsapp(self, runner=None) -> list[int]:
+        """Lê o WhatsApp. Sem sessão gravada, para até um QR novo. Não envia."""
+        entry_ids = WhatsAppReader(self._db, self._data_dir, runner).ingest()
+        self._db.commit()
+        self._reload()
+        return entry_ids
+
+    def send_approved_whatsapp(self, draft_id: int, runner=None) -> bool:
+        """Envia só rascunho aprovado. Sem sessão, a tool de envio não entra."""
+        sender = WhatsAppSender(self._db, self._data_dir, runner)
+        if not sender.send(draft_id):
+            return False
+        self._db.commit()
+        self._reload()
+        return True
+
+    def pair_whatsapp(self, runner=None) -> None:
+        """Grava a sessão Web uma vez, fora da pasta de documentos."""
+        pair(self._data_dir, runner)
 
     def classify_entry(self, entry_id: int) -> str:
         """Classifica uma entrada. A janela não chama este método."""

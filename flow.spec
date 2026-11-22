@@ -6,12 +6,17 @@ from pathlib import Path
 
 root = Path(SPECPATH)
 qml = root / "src" / "flow" / "qml"
+baileys = root / "src" / "flow" / "baileys"
 
 a = Analysis(
     [str(root / "src" / "flow" / "__main__.py")],
     pathex=[str(root / "src")],
     binaries=[],
-    datas=[(str(qml), "flow/qml")],
+    datas=[
+        (str(qml), "flow/qml"),
+        (str(baileys / "bridge.mjs"), "flow/baileys"),
+        (str(baileys / "package.json"), "flow/baileys"),
+    ],
     hiddenimports=[
         "flow.window",
         "flow.controller",
@@ -21,6 +26,7 @@ a = Analysis(
         "flow.classify",
         "flow.mail",
         "flow.send",
+        "flow.whatsapp",
     ],
     hookspath=[],
     hooksconfig={},

@@ -10,3 +10,4 @@ __pycache__/
 *.sqlite-wal
 *.sqlite-shm
 .idea/
+node_modules/

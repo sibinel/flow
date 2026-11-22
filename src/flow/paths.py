@@ -21,11 +21,28 @@ def default_user_data_dir() -> Path:
         base = os.environ.get("APPDATA")
         root = Path(base) if base else Path.home() / "AppData" / "Roaming"
         return root / "Flow"
-    return Path.home() / ".local" / "share" / "flow"
+    return Path.home() / ".local" / "share" / "Flow"
 
 
 def _inside(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
+
+
+def whatsapp_session(data_dir: Path | None = None) -> Path:
+    """Sessão Web do WhatsApp. Fora do pacote e fora da pasta de documentos.
+
+    O SQLite e `documentos` são a cópia que a nuvem sincroniza.
+    A sessão fica ao lado dessa pasta, não dentro dela.
+    """
+    data = (Path(data_dir) if data_dir is not None else default_user_data_dir()).expanduser().resolve()
+    session = (data / "whatsapp-session").resolve()
+    docs = (data / "documentos").resolve()
+    pkg = package_dir().resolve()
+    if _inside(session, pkg):
+        raise ValueError("a sessão do WhatsApp não pode ficar dentro do pacote")
+    if "documentos" in session.parts or _inside(session, docs):
+        raise ValueError("a sessão do WhatsApp não pode ficar na pasta de documentos")
+    return session
 
 
 def ensure_user_data(root: Path | None = None) -> Path:
