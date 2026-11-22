@@ -67,3 +67,7 @@ Teste: o ciclo monta follow-up para aprovar e documento para arquivar, e o que c
 Sync por OneDrive, Google Drive ou equivalente. Backup físico. Escolha do modelo OpenAI. Cofre da senha e do token.
 
 Updates e deletes do SQLite que mexem em mais de uma tabela precisam de uma transação só, em todo ponto que gravar assim. Hoje cada chamada faz o próprio commit. Resolver depois.
+
+O envio de e-mail hoje é só `text/plain`. Falta `text/html`.
+
+O envio não manda anexo. Falta anexar o documento da entrada.
