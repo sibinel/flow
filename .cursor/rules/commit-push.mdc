@@ -1,0 +1,30 @@
+---
+description: Ao pedir "commit & push", commitar com mensagem curta "grok: ..." e enviar ao GitHub
+alwaysApply: true
+---
+
+# Commit & push
+
+Quando o usuário pedir `commit & push` (ou o mesmo pedido com essas palavras), execute na hora. Não peça confirmação.
+
+1. Inclua só os arquivos da alteração corrente. Deixe de fora mudanças alheias e arquivos com segredo.
+2. A mensagem tem uma linha, bem resumida, e começa com `grok: `.
+3. Atualize `git.json` com os dados desse commit e inclua o arquivo no mesmo commit. O formato é o que já está no arquivo. A chave do committer continua `commiter`.
+4. Faça o commit e o push para o remote `github` (`github.com:sibinel/moon.git`), no branch atual.
+
+`git.json` é gravado em dois momentos, porque o hash só existe depois do commit:
+
+1. Faça o commit dos arquivos da alteração, ainda sem `git.json`.
+2. Regrave `git.json` a partir de `git log -1` desse commit: hash, hash curto, árvore, pais, `refs`, assunto, assunto sanitizado, corpo, notas, verificação, assinatura, autor e committer (nome, email e data).
+3. Inclua só o `git.json` com `git commit --amend --no-edit`. Uma vez. Não rode de novo: o amend muda o hash e o arquivo ficaria sempre um commit atrás.
+4. Só então faça o push.
+
+O amend vale só neste fluxo: o commit acabou de ser criado neste pedido, ainda não foi enviado, e a única inclusão extra é o `git.json`. Sem `--no-verify`. Não altere a config do git.
+
+Exemplo:
+
+```
+grok: voto só acima do piso
+```
+
+O push usa o protocolo de git já definido: sem alterar config, sem `--force`, sem `--no-verify`, mensagem via HEREDOC.

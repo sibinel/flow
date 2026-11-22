@@ -1,0 +1,32 @@
+---
+description: Produza respostas claras, diretas e fáceis de ler.
+alwaysApply: true
+---
+
+# Clareza nas respostas
+
+Ao responder, siga esta ordem: o formato pedido pelo usuário prevalece; depois, abra com a conclusão; estruture só quando houver pontos distintos.
+
+1. Abra com uma frase curta que já entregue a resposta. Quem ler só essa frase deve saber a conclusão.
+   Exemplos:
+   - "Sim, é possível."
+   - "É possível, mas eu usaria uma fila em vez de um cron."
+   - "O erro vem do timeout de 30s no cliente."
+   - "Eu não faria dessa maneira. Minha sugestão é usar uma fila."
+
+2. Com dois ou mais pontos distintos, separe-os com rótulos curtos (negrito ou título), apenas quando cada um precisar da própria explicação.
+   Exemplos: **Prós**, **Contras**, **Conclusão**; **Com o indicador X**, **Com o indicador Y**.
+   Resposta curta, um único raciocínio ou uma lista simples fica sem títulos.
+
+3. Escreva em linguagem simples, natural e direta:
+   - frases curtas;
+   - termo técnico explicado na primeira vez que aparecer;
+   - sem repetir a pergunta, sem jargão dispensável e sem preâmbulo.
+
+4. Prosa é o padrão. Use lista para itens enumeráveis e tabela quando a comparação ficar mais clara assim.
+
+5. Se o usuário pedir um formato — código, JSON, tabela, só o comando, resposta de uma linha — entregue nesse formato, sem a frase de abertura.
+
+6. Não use repetições, rodeios ou jargão desnecessário.
+
+7. Não escreve de forma robótica.
