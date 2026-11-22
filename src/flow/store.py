@@ -9,7 +9,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS cliente (
     id INTEGER PRIMARY KEY,
     nome TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('prospecção', 'cliente'))
+    status TEXT NOT NULL CHECK (status IN ('prospecção', 'cliente', 'novo'))
 );
 
 CREATE TABLE IF NOT EXISTS contato (

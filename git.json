@@ -1,0 +1,27 @@
+{
+  "commit": "702e31867c356a76eb80848dadc4afdccff1a7f9",
+  "abbreviated_commit": "702e318",
+  "tree": "04bbc1f23c05c21bd93e47a7f201d22e85484104",
+  "abbreviated_tree": "04bbc1f",
+  "parent": "150fdaff92ff3990af83fd8d0747ce491eb23390",
+  "abbreviated_parent": "150fdaf",
+  "refs": "HEAD -> main",
+  "encoding": "",
+  "subject": "grok: classificador com regras fixas, sem envio",
+  "sanitized_subject_line": "grok-classificador-com-regras-fixas-sem-envio",
+  "body": "",
+  "commit_notes": "",
+  "verification_flag": "N",
+  "signer": "",
+  "signer_key": "",
+  "author": {
+    "name": "Roger",
+    "email": "roger@sibinel.com",
+    "date": "Sun, 22 Nov 2026 11:12:44 -0300"
+  },
+  "commiter": {
+    "name": "Roger",
+    "email": "roger@sibinel.com",
+    "date": "Sun, 22 Nov 2026 11:12:44 -0300"
+  }
+}

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, Slot
 
+from flow.classify import Classifier, ReadTool
 from flow.paths import ensure_user_data
 from flow.queue import RecordModel
 from flow.store import database_file, ensure_demo, open_database
@@ -123,6 +124,13 @@ class Controller(QObject):
                 )
             )
         self._processes.replace(rows)
+
+    def classify_entry(self, entry_id: int) -> str:
+        """Classifica uma entrada. A janela não chama este método."""
+        result = Classifier(ReadTool(self._db)).classify(entry_id)
+        self._db.commit()
+        self._reload()
+        return result
 
     def close(self) -> None:
         self._db.close()

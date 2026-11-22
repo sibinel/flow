@@ -18,6 +18,7 @@ a = Analysis(
         "flow.paths",
         "flow.store",
         "flow.queue",
+        "flow.classify",
     ],
     hookspath=[],
     hooksconfig={},
