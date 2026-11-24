@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import imaplib
 import json
 import sqlite3
@@ -11,6 +12,7 @@ from email import policy
 from email.utils import parseaddr
 from pathlib import Path
 
+from flow.incoming import keep_each, open_entry
 from flow.paths import document_target
 
 
@@ -27,39 +29,38 @@ class ImapReader:
     def ingest(self, host: str, port: int, user: str, password: str) -> list[int]:
         """Lê a caixa e grava entrada e documento. Não envia."""
         self._docs.mkdir(parents=True, exist_ok=True)
-        raw_messages = _fetch(host, port, user, password)
-        return [self._save(raw) for raw in raw_messages]
+        return keep_each(self._db, _fetch(host, port, user, password), self._save)
 
-    def _save(self, raw: bytes) -> int:
+    def _save(self, raw: bytes) -> int | None:
         message = message_from_bytes(raw, policy=policy.default)
-        address = parseaddr(message.get("From", ""))[1].casefold()
-        contact = self._db.execute(
-            "SELECT id FROM contato WHERE tipo = 'email' AND lower(valor) = ?",
-            (address,),
-        ).fetchone()
-        if contact is None:
-            raise ValueError("contato de e-mail não cadastrado")
+        address = parseaddr(message.get("From", ""))[1]
         body, attachments = _parts(message)
-        entry_id = self._db.execute(
-            """
-            INSERT INTO entrada (
-                cliente_id, contato_id, processo_id, recebido_em, texto, estado
-            ) VALUES (NULL, ?, NULL, ?, ?, 'nova')
-            """,
-            (contact["id"], message.get("Date") or "", body),
-        ).lastrowid
-        saved = int(entry_id)
+        message_id = (message.get("Message-ID") or "").strip()
+        if not message_id:
+            message_id = hashlib.sha256(raw).hexdigest()
+        entry_id = open_entry(
+            self._db,
+            kind="email",
+            value=address,
+            message_id=message_id,
+            received_at=message.get("Date") or "",
+            text=body,
+            has_text=bool(body.strip()),
+            has_file=bool(attachments),
+        )
+        if entry_id is None:
+            return None
         for index, (filename, payload) in enumerate(attachments, start=1):
-            target = document_target(self._docs, filename, saved, index)
+            target = document_target(self._docs, filename, entry_id, index)
             target.write_bytes(payload)
             self._db.execute(
                 """
                 INSERT INTO documento (entrada_id, caminho, nome)
                 VALUES (?, ?, ?)
                 """,
-                (saved, str(target), filename),
+                (entry_id, str(target), filename),
             )
-        return saved
+        return entry_id
 
 
 def _fetch(host: str, port: int, user: str, password: str) -> list[bytes]:

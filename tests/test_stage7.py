@@ -174,7 +174,7 @@ class WhatsAppSessionTest(unittest.TestCase):
 
         entry_ids = self.controller.ingest_whatsapp(runner)
         self.assertEqual(ops, ["pair", "read"])
-        self.assertEqual(len(entry_ids), 1)
+        self.assertEqual(len(entry_ids), 2)
         stored = self.db.execute(
             "SELECT cliente_id, contato_id, processo_id, texto, estado FROM entrada WHERE id = ?",
             (entry_ids[0],),
@@ -196,9 +196,16 @@ class WhatsAppSessionTest(unittest.TestCase):
         self.assertFalse(pkg in saved.resolve().parents)
         self.assertFalse((session / "procuracao.pdf").exists())
         personal = self.db.execute(
-            "SELECT COUNT(*) FROM entrada WHERE texto = 'mensagem pessoal'"
-        ).fetchone()[0]
-        self.assertEqual(personal, 0)
+            """
+            SELECT entrada.cliente_id, entrada.estado, pendencia.motivo
+            FROM entrada
+            LEFT JOIN pendencia ON pendencia.entrada_id = entrada.id
+            WHERE entrada.texto = 'mensagem pessoal'
+            """
+        ).fetchone()
+        self.assertIsNone(personal["cliente_id"])
+        self.assertEqual(personal["estado"], "pendente")
+        self.assertEqual(personal["motivo"], "contato novo")
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM cliente").fetchone()[0], before)
         self.assertNotIn("send", ops)

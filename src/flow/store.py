@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS cliente (
 
 CREATE TABLE IF NOT EXISTS contato (
     id INTEGER PRIMARY KEY,
-    cliente_id INTEGER NOT NULL REFERENCES cliente(id),
+    cliente_id INTEGER REFERENCES cliente(id),
     tipo TEXT NOT NULL CHECK (tipo IN ('whatsapp', 'email')),
     valor TEXT NOT NULL
 );
@@ -34,8 +34,13 @@ CREATE TABLE IF NOT EXISTS entrada (
     processo_id INTEGER REFERENCES processo(id),
     recebido_em TEXT NOT NULL,
     texto TEXT NOT NULL,
-    estado TEXT NOT NULL CHECK (estado IN ('nova', 'pendente', 'arquivada'))
+    estado TEXT NOT NULL CHECK (estado IN ('nova', 'pendente', 'arquivada')),
+    mensagem_id TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS entrada_mensagem_id
+ON entrada(mensagem_id)
+WHERE mensagem_id IS NOT NULL AND mensagem_id != '';
 
 CREATE TABLE IF NOT EXISTS documento (
     id INTEGER PRIMARY KEY,
@@ -48,7 +53,7 @@ CREATE TABLE IF NOT EXISTS pendencia (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
     motivo TEXT NOT NULL CHECK (motivo IN (
-        'nome diferente', 'contato novo', 'processo não citado'
+        'nome diferente', 'contato novo', 'processo não citado', 'mídia não baixada'
     ))
 );
 
@@ -110,8 +115,72 @@ def open_database(data_dir: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
+    _migrate(connection)
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Acrescenta o id da mensagem e o contato sem cliente em bancos já criados."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(entrada)")}
+    if "mensagem_id" not in columns:
+        connection.execute("ALTER TABLE entrada ADD COLUMN mensagem_id TEXT")
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS entrada_mensagem_id
+        ON entrada(mensagem_id)
+        WHERE mensagem_id IS NOT NULL AND mensagem_id != ''
+        """
+    )
+    contato = list(connection.execute("PRAGMA table_info(contato)"))
+    cliente = next(row for row in contato if row[1] == "cliente_id")
+    if cliente[3]:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            """
+            CREATE TABLE contato_migrado (
+                id INTEGER PRIMARY KEY,
+                cliente_id INTEGER REFERENCES cliente(id),
+                tipo TEXT NOT NULL CHECK (tipo IN ('whatsapp', 'email')),
+                valor TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO contato_migrado (id, cliente_id, tipo, valor)
+            SELECT id, cliente_id, tipo, valor FROM contato
+            """
+        )
+        connection.execute("DROP TABLE contato")
+        connection.execute("ALTER TABLE contato_migrado RENAME TO contato")
+        connection.execute("PRAGMA foreign_keys = ON")
+    pendencia = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pendencia'"
+    ).fetchone()
+    if pendencia is not None and "mídia não baixada" not in pendencia["sql"]:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            """
+            CREATE TABLE pendencia_migrada (
+                id INTEGER PRIMARY KEY,
+                entrada_id INTEGER NOT NULL REFERENCES entrada(id),
+                motivo TEXT NOT NULL CHECK (motivo IN (
+                    'nome diferente', 'contato novo', 'processo não citado',
+                    'mídia não baixada'
+                ))
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO pendencia_migrada (id, entrada_id, motivo)
+            SELECT id, entrada_id, motivo FROM pendencia
+            """
+        )
+        connection.execute("DROP TABLE pendencia")
+        connection.execute("ALTER TABLE pendencia_migrada RENAME TO pendencia")
+        connection.execute("PRAGMA foreign_keys = ON")
 
 
 _DEMO_CLIENTS = (

@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from flow.incoming import keep_each, open_entry
 from flow.paths import document_target, package_dir, whatsapp_session
 from flow.send import SendTool
 
@@ -60,44 +61,42 @@ class WhatsAppReader:
         session = _require_session(self._data_dir)
         result = self._runner(session, "read", {})
         _refuse_qr(result)
-        saved: list[int] = []
-        for message in result.get("messages") or []:
-            entry_id = self._save(message)
-            if entry_id is not None:
-                saved.append(entry_id)
-        return saved
+        return keep_each(self._db, result.get("messages") or [], self._save)
 
     def _save(self, message: dict) -> int | None:
-        contact_id = _contact_id(self._db, str(message.get("from") or ""))
-        if contact_id is None:
-            return None
-        body = str(message.get("text") or "").strip()
+        original = str(message.get("text") or "").strip()
+        note = str(message.get("media_note") or "").strip()
+        if note:
+            text = f"{original}\n{note}".strip() if original else note
+        else:
+            text = original
         attachments = list(message.get("attachments") or [])
-        if not body and not attachments:
+        entry_id = open_entry(
+            self._db,
+            kind="whatsapp",
+            value=str(message.get("from") or ""),
+            message_id=str(message.get("id") or "").strip(),
+            received_at=str(message.get("received_at") or ""),
+            text=text,
+            has_text=bool(original),
+            has_file=bool(attachments),
+        )
+        if entry_id is None:
             return None
-        entry_id = self._db.execute(
-            """
-            INSERT INTO entrada (
-                cliente_id, contato_id, processo_id, recebido_em, texto, estado
-            ) VALUES (NULL, ?, NULL, ?, ?, 'nova')
-            """,
-            (contact_id, str(message.get("received_at") or ""), body),
-        ).lastrowid
-        saved = int(entry_id)
         for index, item in enumerate(attachments, start=1):
             name = Path(str(item.get("name") or "anexo")).name
-            payload = base64.b64decode(str(item.get("data_b64") or ""))
+            payload = base64.b64decode(str(item.get("data_b64") or ""), validate=True)
             self._docs.mkdir(parents=True, exist_ok=True)
-            target = document_target(self._docs, name, saved, index)
+            target = document_target(self._docs, name, entry_id, index)
             target.write_bytes(payload)
             self._db.execute(
                 """
                 INSERT INTO documento (entrada_id, caminho, nome)
                 VALUES (?, ?, ?)
                 """,
-                (saved, str(target), name),
+                (entry_id, str(target), name),
             )
-        return saved
+        return entry_id
 
 
 class WhatsAppSender:
@@ -207,16 +206,3 @@ def _bridge_script() -> Path:
         return base / "flow" / "baileys" / "bridge.mjs"
     return Path(__file__).resolve().parent / "baileys" / "bridge.mjs"
 
-
-def _digits(value: str) -> str:
-    return "".join(ch for ch in value if ch.isdigit())
-
-
-def _contact_id(connection: sqlite3.Connection, number: str) -> int | None:
-    target = _digits(number)
-    if not target:
-        return None
-    for row in connection.execute("SELECT id, valor FROM contato WHERE tipo = 'whatsapp'"):
-        if _digits(row["valor"]) == target:
-            return int(row["id"])
-    return None

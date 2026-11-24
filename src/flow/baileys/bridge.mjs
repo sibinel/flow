@@ -170,10 +170,28 @@ function textOf(msg) {
   )
 }
 
+function mediaLabel(kind) {
+  const names = {
+    imageMessage: 'imagem',
+    documentMessage: 'documento',
+    videoMessage: 'vídeo',
+    ptvMessage: 'vídeo',
+    audioMessage: 'áudio',
+    stickerMessage: 'figurinha',
+  }
+  return names[kind] || ''
+}
+
 async function attachmentOf(msg, sock) {
   const content = extractMessageContent(msg.message) || {}
   const kind = getContentType(content)
-  if (kind !== 'imageMessage' && kind !== 'documentMessage') return null
+  if (!kind || kind === 'conversation' || kind === 'extendedTextMessage') {
+    return { file: null, note: '' }
+  }
+  const label = mediaLabel(kind) || kind
+  if (kind !== 'imageMessage' && kind !== 'documentMessage') {
+    return { file: null, note: `mídia não baixada: ${label}` }
+  }
   const media = content[kind] || {}
   try {
     const buffer = await downloadMediaMessage(
@@ -182,11 +200,17 @@ async function attachmentOf(msg, sock) {
       {},
       { logger, reuploadRequest: (item) => sock.updateMediaMessage(item) },
     )
-    if (!buffer || buffer.length > 15 * 1024 * 1024) return null
+    if (!buffer || buffer.length > 15 * 1024 * 1024) {
+      const why = buffer && buffer.length > 15 * 1024 * 1024 ? ' acima de 15 MB' : ''
+      return { file: null, note: `mídia não baixada: ${label}${why}` }
+    }
     const name = media.fileName || (kind === 'imageMessage' ? 'imagem.jpg' : 'anexo')
-    return { name: path.basename(String(name)), data_b64: Buffer.from(buffer).toString('base64') }
+    return {
+      file: { name: path.basename(String(name)), data_b64: Buffer.from(buffer).toString('base64') },
+      note: '',
+    }
   } catch {
-    return null
+    return { file: null, note: `mídia não baixada: ${label}` }
   }
 }
 
@@ -223,13 +247,14 @@ async function readMessages(folder) {
     const from = phoneOf(msg)
     if (!from) continue
     const text = textOf(msg)
-    const attachment = await attachmentOf(msg, sock)
-    if (!text && !attachment) continue
+    const found = await attachmentOf(msg, sock)
     messages.push({
+      id: msg.key.id,
       from,
       text,
       received_at: isoTime(msg),
-      attachments: attachment ? [attachment] : [],
+      attachments: found.file ? [found.file] : [],
+      media_note: found.note,
     })
   }
   end(sock)
