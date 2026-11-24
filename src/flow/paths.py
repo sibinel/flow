@@ -45,6 +45,24 @@ def whatsapp_session(data_dir: Path | None = None) -> Path:
     return session
 
 
+def document_target(docs: Path, filename: str, entry_id: int, index: int) -> Path:
+    """Caminho único dentro de documentos, sem diretório vindo do remetente."""
+    base = Path(filename).name
+    if base in {"", ".", ".."}:
+        base = "anexo"
+    stem = Path(base).stem
+    suffix = Path(base).suffix
+    if stem in {"", ".", ".."}:
+        stem = "anexo"
+    marker = f"{entry_id}-{index}"
+    candidate = docs / f"{stem}-{marker}{suffix}"
+    extra = 2
+    while candidate.exists():
+        candidate = docs / f"{stem}-{marker}-{extra}{suffix}"
+        extra += 1
+    return candidate
+
+
 def ensure_user_data(root: Path | None = None) -> Path:
     """Cria a pasta se faltar. Não apaga o que já está nela."""
     chosen = Path(root) if root is not None else default_user_data_dir()

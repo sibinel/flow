@@ -11,7 +11,7 @@ from pathlib import Path
 
 from flow.controller import Controller
 from flow.mail import ImapReader
-from flow.paths import package_dir
+from flow.paths import document_target, package_dir
 from flow.store import open_database
 
 
@@ -147,3 +147,90 @@ class ImapReaderTest(unittest.TestCase):
             self.assertNotIn(banned, window)
         self.assertNotIn("smtp", mail)
         self.assertNotIn("classify", mail)
+
+    def test_same_attachment_name_keeps_both_files(self) -> None:
+        ana = self.db.execute(
+            "INSERT INTO cliente (nome, status) VALUES ('Ana Lima', 'cliente')"
+        ).lastrowid
+        bruno = self.db.execute(
+            "INSERT INTO cliente (nome, status) VALUES ('Bruno Dias', 'cliente')"
+        ).lastrowid
+        self.db.execute(
+            "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'email', 'ana.lima@email.com')",
+            (ana,),
+        )
+        self.db.execute(
+            "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'email', 'bruno.dias@email.com')",
+            (bruno,),
+        )
+        self.db.commit()
+        docs = self.controller.database_path.parent / "documentos"
+        target = document_target(docs, "../segredo/contrato.pdf", 3, 1)
+        self.assertEqual(target.parent, docs)
+        self.assertEqual(target.name, "contrato-3-1.pdf")
+        self.assertNotIn("segredo", target.parts)
+
+        first = FakeImap(
+            _message_with(
+                "Ana Lima <ana.lima@email.com>",
+                [
+                    ("contrato.pdf", b"contrato da ana"),
+                    ("pasta/contrato.pdf", b"segundo contrato da ana"),
+                ],
+            )
+        )
+        try:
+            ana_ids = self.controller.ingest_mail("127.0.0.1", first.port, "ana", "segredo")
+        finally:
+            first.close()
+        second = FakeImap(
+            _message_with(
+                "Bruno Dias <bruno.dias@email.com>",
+                [("contrato.pdf", b"contrato do bruno")],
+            )
+        )
+        try:
+            bruno_ids = self.controller.ingest_mail("127.0.0.1", second.port, "bruno", "segredo")
+        finally:
+            second.close()
+
+        rows = self.db.execute(
+            "SELECT entrada_id, caminho, nome FROM documento ORDER BY id"
+        ).fetchall()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([row["nome"] for row in rows], ["contrato.pdf"] * 3)
+        self.assertEqual([row["entrada_id"] for row in rows], [ana_ids[0], ana_ids[0], bruno_ids[0]])
+        stored = [Path(row["caminho"]) for row in rows]
+        self.assertEqual(len({path.resolve() for path in stored}), 3)
+        self.assertEqual(
+            [path.name for path in stored],
+            [
+                f"contrato-{ana_ids[0]}-1.pdf",
+                f"contrato-{ana_ids[0]}-2.pdf",
+                f"contrato-{bruno_ids[0]}-1.pdf",
+            ],
+        )
+        for path in stored:
+            self.assertEqual(path.parent, docs)
+            self.assertNotIn("pasta", path.parts)
+            self.assertNotIn("segredo", path.parts)
+        self.assertEqual(stored[0].read_bytes(), b"contrato da ana")
+        self.assertEqual(stored[1].read_bytes(), b"segundo contrato da ana")
+        self.assertEqual(stored[2].read_bytes(), b"contrato do bruno")
+        self.assertFalse((docs / "contrato.pdf").exists())
+
+
+def _message_with(sender: str, files: list[tuple[str, bytes]]) -> bytes:
+    mail = EmailMessage()
+    mail["From"] = sender
+    mail["To"] = "escritorio@flow.local"
+    mail["Date"] = "Wed, 18 Nov 2026 10:00:00 -0300"
+    mail.set_content("Segue o contrato.")
+    for name, payload in files:
+        mail.add_attachment(
+            payload,
+            maintype="application",
+            subtype="pdf",
+            filename=name,
+        )
+    return mail.as_bytes()

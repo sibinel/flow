@@ -248,6 +248,79 @@ class WhatsAppSessionTest(unittest.TestCase):
             self.assertNotIn(banned, bridge)
             self.assertNotIn(banned, meta["dependencies"])
 
+    def test_same_attachment_name_keeps_both_files(self) -> None:
+        other = self.db.execute(
+            "INSERT INTO cliente (nome, status) VALUES ('Ana Lima', 'cliente')"
+        ).lastrowid
+        self.db.execute(
+            "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'whatsapp', ?)",
+            (other, "+5511911112222"),
+        )
+        self.db.commit()
+        session = whatsapp_session(self.data)
+        session.mkdir()
+        (session / "creds.json").write_text(
+            json.dumps({"registered": True}),
+            encoding="utf-8",
+        )
+        docs = self.data / "documentos"
+
+        def runner(session_path: Path, op: str, payload: dict) -> dict:
+            self.assertEqual(op, "read")
+            return {
+                "messages": [
+                    {
+                        "from": "+5511987654321",
+                        "text": "dois contratos",
+                        "received_at": "2026-11-22T11:00:00-03:00",
+                        "attachments": [
+                            {"name": "contrato.pdf", "data_b64": base64.b64encode(b"um").decode()},
+                            {
+                                "name": "../segredo/contrato.pdf",
+                                "data_b64": base64.b64encode(b"dois").decode(),
+                            },
+                        ],
+                    },
+                    {
+                        "from": "+5511911112222",
+                        "text": "outro cliente",
+                        "received_at": "2026-11-22T11:05:00-03:00",
+                        "attachments": [
+                            {"name": "contrato.pdf", "data_b64": base64.b64encode(b"tres").decode()},
+                        ],
+                    },
+                ]
+            }
+
+        entry_ids = self.controller.ingest_whatsapp(runner)
+        self.assertEqual(len(entry_ids), 2)
+        rows = self.db.execute(
+            "SELECT entrada_id, caminho, nome FROM documento ORDER BY id"
+        ).fetchall()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([row["nome"] for row in rows], ["contrato.pdf"] * 3)
+        self.assertEqual(
+            [row["entrada_id"] for row in rows],
+            [entry_ids[0], entry_ids[0], entry_ids[1]],
+        )
+        stored = [Path(row["caminho"]) for row in rows]
+        self.assertEqual(
+            [path.name for path in stored],
+            [
+                f"contrato-{entry_ids[0]}-1.pdf",
+                f"contrato-{entry_ids[0]}-2.pdf",
+                f"contrato-{entry_ids[1]}-1.pdf",
+            ],
+        )
+        for path in stored:
+            self.assertEqual(path.parent.resolve(), docs.resolve())
+            self.assertNotIn("segredo", path.parts)
+        self.assertEqual(stored[0].read_bytes(), b"um")
+        self.assertEqual(stored[1].read_bytes(), b"dois")
+        self.assertEqual(stored[2].read_bytes(), b"tres")
+        self.assertFalse((docs / "contrato.pdf").exists())
+        self.assertFalse((docs / "segredo").exists())
+
     def test_window_does_not_open_whatsapp(self) -> None:
         qml = (package_dir() / "qml" / "Main.qml").read_text(encoding="utf-8").lower()
         window = (package_dir() / "window.py").read_text(encoding="utf-8").lower()

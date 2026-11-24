@@ -9,6 +9,8 @@ from email import policy
 from email.utils import parseaddr
 from pathlib import Path
 
+from flow.paths import document_target
+
 
 class ImapReader:
     name = "leitura"
@@ -44,17 +46,18 @@ class ImapReader:
             """,
             (contact["id"], message.get("Date") or "", body),
         ).lastrowid
-        for filename, payload in attachments:
-            target = self._docs / filename
+        saved = int(entry_id)
+        for index, (filename, payload) in enumerate(attachments, start=1):
+            target = document_target(self._docs, filename, saved, index)
             target.write_bytes(payload)
             self._db.execute(
                 """
                 INSERT INTO documento (entrada_id, caminho, nome)
                 VALUES (?, ?, ?)
                 """,
-                (entry_id, str(target), filename),
+                (saved, str(target), filename),
             )
-        return int(entry_id)
+        return saved
 
 
 def _fetch(host: str, port: int, user: str, password: str) -> list[bytes]:
