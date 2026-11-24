@@ -61,7 +61,7 @@ class ImapReader:
 
 
 def _fetch(host: str, port: int, user: str, password: str) -> list[bytes]:
-    with imaplib.IMAP4(host, port) as imap:
+    with _imap(host, port) as imap:
         imap.login(user, password)
         imap.select("INBOX", readonly=True)
         status, found = imap.search(None, "ALL")
@@ -76,6 +76,13 @@ def _fetch(host: str, port: int, user: str, password: str) -> list[bytes]:
                 if isinstance(item, tuple) and len(item) > 1:
                     messages.append(item[1])
         return messages
+
+
+def _imap(host: str, port: int):
+    """Em loopback o teste fala IMAP em claro. Fora dele a conexão já nasce cifrada."""
+    if host == "127.0.0.1":
+        return imaplib.IMAP4(host, port)
+    return imaplib.IMAP4_SSL(host, port)
 
 
 def _parts(message) -> tuple[str, list[tuple[str, bytes]]]:

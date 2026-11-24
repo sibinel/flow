@@ -1,14 +1,14 @@
 {
-  "commit": "3f6f51bc7336ab57a9e02f2a8aef860003eeb1bb",
-  "abbreviated_commit": "3f6f51b",
-  "tree": "678c8e9e42e1fa6b7024ac5bcf6a68668e2d8393",
-  "abbreviated_tree": "678c8e9",
-  "parent": "d16d8a327c51719b537c0ab18dffb4f5379c406c",
-  "abbreviated_parent": "d16d8a3",
+  "commit": "0d39486f2b8353142be6fdbe03c53368b9586e8e",
+  "abbreviated_commit": "0d39486",
+  "tree": "7200e256dec0991f02cd60c61a2f21ecbdd6be79",
+  "abbreviated_tree": "7200e25",
+  "parent": "d4d9fdc401639155e94f1ba8baafd01459c1e4c0",
+  "abbreviated_parent": "d4d9fdc",
   "refs": "HEAD -> main",
   "encoding": "",
-  "subject": "grok: anexo com nome único no disco",
-  "sanitized_subject_line": "grok-anexo-com-nome-nico-no-disco",
+  "subject": "grok: imap e smtp cifram fora do loopback",
+  "sanitized_subject_line": "grok-imap-e-smtp-cifram-fora-do-loopback",
   "body": "",
   "commit_notes": "",
   "verification_flag": "N",
@@ -17,11 +17,11 @@
   "author": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Tue, 24 Nov 2026 12:45:05 -0300"
+    "date": "Tue, 24 Nov 2026 19:33:55 -0300"
   },
   "commiter": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Tue, 24 Nov 2026 12:45:05 -0300"
+    "date": "Tue, 24 Nov 2026 19:33:55 -0300"
   }
 }

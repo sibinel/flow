@@ -138,10 +138,12 @@ class Controller(QObject):
         self._reload()
         return entry_ids
 
-    def send_approved_mail(self, draft_id: int, host: str, port: int, sender: str) -> bool:
+    def send_approved_mail(
+        self, draft_id: int, host: str, port: int, sender: str, password: str
+    ) -> bool:
         """Envia só rascunho aprovado. Sem aprovação, a tool de envio não entra."""
         sender_tool = SmtpSender(self._db)
-        if not sender_tool.send(draft_id, host, port, sender):
+        if not sender_tool.send(draft_id, host, port, sender, password):
             return False
         self._db.commit()
         self._reload()

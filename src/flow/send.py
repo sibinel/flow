@@ -22,7 +22,7 @@ class SmtpSender:
             return ()
         return (self._tool.name,)
 
-    def send(self, draft_id: int, host: str, port: int, sender: str) -> bool:
+    def send(self, draft_id: int, host: str, port: int, sender: str, password: str) -> bool:
         row = self._db.execute(
             """
             SELECT rascunho.texto, rascunho.estado, contato.valor
@@ -36,7 +36,7 @@ class SmtpSender:
         if row is None or row["estado"] != "aprovado":
             return False
         self._tool = SendTool()
-        _deliver(host, port, sender, row["valor"], row["texto"])
+        _deliver(host, port, sender, row["valor"], row["texto"], password)
         self._db.execute(
             """
             INSERT INTO envio (rascunho_id, enviado_em, canal)
@@ -51,10 +51,21 @@ class SmtpSender:
         return True
 
 
-def _deliver(host: str, port: int, sender: str, recipient: str, body: str) -> None:
+def _deliver(
+    host: str, port: int, sender: str, recipient: str, body: str, password: str
+) -> None:
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
     message.set_content(body)
-    with smtplib.SMTP(host, port, timeout=5) as smtp:
+    with _smtp(host, port) as smtp:
+        if host != "127.0.0.1":
+            smtp.login(sender, password)
         smtp.send_message(message)
+
+
+def _smtp(host: str, port: int):
+    """Em loopback o teste fala SMTP em claro. Fora dele a conexão já nasce cifrada."""
+    if host == "127.0.0.1":
+        return smtplib.SMTP(host, port, timeout=5)
+    return smtplib.SMTP_SSL(host, port, timeout=5)

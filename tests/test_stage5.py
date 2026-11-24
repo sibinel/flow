@@ -6,6 +6,7 @@ import socket
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -104,7 +105,10 @@ class ImapReaderTest(unittest.TestCase):
         self.db.commit()
         server = FakeImap(_message())
         try:
-            entry_ids = self.controller.ingest_mail("127.0.0.1", server.port, "ana", "segredo")
+            with patch("flow.mail.imaplib.IMAP4_SSL", side_effect=AssertionError("ssl")):
+                entry_ids = self.controller.ingest_mail(
+                    "127.0.0.1", server.port, "ana", "segredo"
+                )
         finally:
             server.close()
 
@@ -147,6 +151,45 @@ class ImapReaderTest(unittest.TestCase):
             self.assertNotIn(banned, window)
         self.assertNotIn("smtp", mail)
         self.assertNotIn("classify", mail)
+
+    def test_remote_imap_is_born_encrypted_and_keeps_the_port(self) -> None:
+        trace: list[tuple] = []
+
+        class SecureImap:
+            def __init__(self, host: str, port: int) -> None:
+                trace.append(("connect", host, port))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> bool:
+                return False
+
+            def login(self, user: str, password: str) -> None:
+                trace.append(("login", user, password))
+
+            def select(self, mailbox: str, readonly: bool = False):
+                trace.append(("select", mailbox))
+                return "OK", [b"0"]
+
+            def search(self, charset, criteria):
+                return "OK", [b""]
+
+        with (
+            patch("flow.mail.imaplib.IMAP4", side_effect=AssertionError("claro")),
+            patch("flow.mail.imaplib.IMAP4_SSL", new=SecureImap),
+        ):
+            entry_ids = self.controller.ingest_mail("imap.example", 1993, "ana", "segredo")
+
+        self.assertEqual(entry_ids, [])
+        self.assertEqual(
+            trace,
+            [
+                ("connect", "imap.example", 1993),
+                ("login", "ana", "segredo"),
+                ("select", "INBOX"),
+            ],
+        )
 
     def test_same_attachment_name_keeps_both_files(self) -> None:
         ana = self.db.execute(

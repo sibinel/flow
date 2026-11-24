@@ -6,6 +6,7 @@ import socket
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from flow.classify import Classifier, ReadTool
@@ -106,7 +107,9 @@ class SmtpSenderTest(unittest.TestCase):
         try:
             held = SmtpSender(self.db)
             self.assertEqual(held.tool_names(), ())
-            self.assertFalse(held.send(draft, "127.0.0.1", server.port, "escritorio@flow.local"))
+            self.assertFalse(
+                held.send(draft, "127.0.0.1", server.port, "escritorio@flow.local", "segredo")
+            )
             self.assertEqual(server.commands, [])
             self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
 
@@ -114,11 +117,12 @@ class SmtpSenderTest(unittest.TestCase):
             self.assertEqual(Classifier(ReadTool(self.db)).tool_names(), ("leitura",))
             self.assertNotIn("envio", Classifier(ReadTool(self.db)).tool_names())
 
-            self.assertTrue(
-                self.controller.send_approved_mail(
-                    draft, "127.0.0.1", server.port, "escritorio@flow.local"
+            with patch("flow.send.smtplib.SMTP_SSL", side_effect=AssertionError("ssl")):
+                self.assertTrue(
+                    self.controller.send_approved_mail(
+                        draft, "127.0.0.1", server.port, "escritorio@flow.local", "segredo"
+                    )
                 )
-            )
         finally:
             server.close()
 
@@ -138,6 +142,69 @@ class SmtpSenderTest(unittest.TestCase):
         self.assertIn(
             "Confirmo o recebimento?",
             b"".join(server.messages).decode("utf-8", "replace"),
+        )
+        self.assertNotIn("AUTH", server.commands)
+
+    def test_remote_smtp_logs_in_after_tls_and_keeps_the_port(self) -> None:
+        client = self.db.execute(
+            "INSERT INTO cliente (nome, status) VALUES ('Ana Lima', 'cliente')"
+        ).lastrowid
+        contact = self.db.execute(
+            "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'email', 'ana.lima@email.com')",
+            (client,),
+        ).lastrowid
+        entry = self.db.execute(
+            """
+            INSERT INTO entrada (
+                cliente_id, contato_id, recebido_em, texto, estado
+            ) VALUES (?, ?, '2026-11-22T10:00:00', 'contrato', 'nova')
+            """,
+            (client, contact),
+        ).lastrowid
+        draft = self.db.execute(
+            """
+            INSERT INTO rascunho (entrada_id, texto, estado)
+            VALUES (?, 'Ana, confirmo.', 'aguardando')
+            """,
+            (entry,),
+        ).lastrowid
+        self.db.commit()
+        self.assertTrue(self.controller.approve(draft))
+        trace: list[tuple] = []
+
+        class SecureSmtp:
+            def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
+                trace.append(("connect", host, port))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args) -> bool:
+                return False
+
+            def login(self, user: str, password: str) -> None:
+                trace.append(("login", user, password))
+
+            def send_message(self, message) -> None:
+                trace.append(("data", str(message["From"]), str(message["To"])))
+
+        with (
+            patch("flow.send.smtplib.SMTP", side_effect=AssertionError("claro")),
+            patch("flow.send.smtplib.SMTP_SSL", new=SecureSmtp),
+        ):
+            self.assertTrue(
+                self.controller.send_approved_mail(
+                    draft, "smtp.example", 2525, "escritorio@flow.local", "segredo"
+                )
+            )
+
+        self.assertEqual(
+            trace,
+            [
+                ("connect", "smtp.example", 2525),
+                ("login", "escritorio@flow.local", "segredo"),
+                ("data", "escritorio@flow.local", "ana.lima@email.com"),
+            ],
         )
 
     def test_window_does_not_send(self) -> None:
