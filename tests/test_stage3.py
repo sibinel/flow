@@ -208,9 +208,13 @@ class WindowCallsOnlyTheControllerTest(unittest.TestCase):
                 "approve",
                 "indicate",
                 "selectClient",
+                "search",
+                "pair_whatsapp",
                 "drafts",
                 "pendings",
                 "clients",
                 "processes",
+                "whatsappNotice",
+                "qrImage",
             }
         )

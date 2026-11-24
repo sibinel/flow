@@ -35,11 +35,12 @@ def session_ready(session: Path) -> bool:
     return data.get("registered") is True
 
 
-def pair(data_dir: Path, runner=None) -> None:
+def pair(data_dir: Path, runner=None) -> dict:
     """Mostra o QR uma vez e grava a sessão fora da pasta de documentos."""
     session = whatsapp_session(data_dir)
     session.mkdir(parents=True, exist_ok=True)
-    (runner or invoke)(session, "pair", {})
+    result = (runner or invoke)(session, "pair", {})
+    return result if isinstance(result, dict) else {}
 
 
 class WhatsAppReader:

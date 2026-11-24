@@ -50,6 +50,84 @@ ApplicationWindow {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+
+            TextField {
+                id: searchField
+                Layout.fillWidth: true
+                placeholderText: "Quando falei com o cliente sobre o tema"
+                color: "#fafaf9"
+                font.pixelSize: 14
+                implicitHeight: 40
+                leftPadding: 12
+                rightPadding: 12
+                background: Rectangle {
+                    radius: 8
+                    color: "#292524"
+                    border.color: "#44403c"
+                }
+            }
+            Button {
+                text: "Buscar"
+                implicitHeight: 40
+                leftPadding: 18
+                rightPadding: 18
+                font.pixelSize: 14
+                font.capitalization: Font.MixedCase
+                onClicked: controller.search(searchField.text)
+                contentItem: Text {
+                    text: parent.text
+                    font: parent.font
+                    color: "#fafaf9"
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: 8
+                    color: parent.down ? "#44403c" : parent.hovered ? "#57534e" : "#44403c"
+                }
+            }
+            Button {
+                text: "Parear"
+                implicitHeight: 40
+                leftPadding: 18
+                rightPadding: 18
+                font.pixelSize: 14
+                font.capitalization: Font.MixedCase
+                onClicked: controller.pair_whatsapp()
+                contentItem: Text {
+                    text: parent.text
+                    font: parent.font
+                    color: "#fafaf9"
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                    radius: 8
+                    color: parent.down ? "#44403c" : parent.hovered ? "#57534e" : "#44403c"
+                }
+            }
+        }
+
+        Label {
+            visible: controller.whatsappNotice.length > 0
+            text: controller.whatsappNotice
+            color: "#fbbf24"
+            font.pixelSize: 14
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
+
+        Image {
+            visible: controller.qrImage.length > 0
+            source: controller.qrImage.length > 0 ? controller.qrImage : ""
+            Layout.preferredWidth: 180
+            Layout.preferredHeight: 180
+            fillMode: Image.PreserveAspectFit
+        }
+
         GridLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true

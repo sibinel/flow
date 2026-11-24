@@ -2,27 +2,38 @@
 
 from __future__ import annotations
 
+import threading
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Slot
+from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, Signal, Slot
 
 from flow.classify import Classifier, ReadTool
 from flow.cycle import DayCycle
 from flow.harness import Harness
 from flow.llm import CloudLLM
-from flow.mail import ImapReader
-from flow.paths import ensure_user_data
+from flow.mail import ImapReader, load_mail_account
+from flow.paths import ensure_user_data, whatsapp_session
 from flow.send import SmtpSender
-from flow.whatsapp import WhatsAppReader, WhatsAppSender, pair
+from flow.whatsapp import WhatsAppReader, WhatsAppSender, pair, session_ready
 from flow.queue import RecordModel
 from flow.store import database_file, ensure_demo, open_database
 
+_STOPPED = "Leitura e envio de WhatsApp estão parados."
+
 
 class Controller(QObject):
+    surfaceChanged = Signal()
+
     def __init__(self, data_root: Path | None = None) -> None:
         super().__init__()
         self._data_dir = ensure_user_data(data_root)
         self._db = open_database(self._data_dir)
+        self._qr_image = ""
+        self._session_ready = False
+        self._clock: QTimer | None = None
+        self._qr_clock: QTimer | None = None
+        self._pairing = False
         if data_root is None:
             ensure_demo(self._db)
         self._drafts = RecordModel(["draftId", "text", "address", "channel"])
@@ -33,6 +44,72 @@ class Controller(QObject):
             model.setParent(self)
         self._reload()
         self.selectClient(0)
+        try:
+            self._session_ready = session_ready(whatsapp_session(self._data_dir))
+        except ValueError:
+            self._session_ready = False
+
+    def watch_schedule(self) -> None:
+        """A partir da abertura, olha o horário e chama o ciclo só nele."""
+        if QCoreApplication.instance() is None or self._clock is not None:
+            return
+        self._clock = QTimer(self)
+        self._clock.setInterval(15000)
+        self._clock.timeout.connect(self._tick)
+        self._clock.start()
+        self._qr_clock = QTimer(self)
+        self._qr_clock.setInterval(400)
+        self._qr_clock.timeout.connect(self._watch_qr)
+        self._qr_clock.start()
+
+    def _tick(self, now: datetime | None = None):
+        moment = datetime.now().astimezone() if now is None else now
+        return self.run_cycle(moment, self._dispatch_approved)
+
+    def _collect(self) -> None:
+        """Coleta antes da fila. Sem conta ou sem sessão, esse lado não corre."""
+        account = load_mail_account(self._data_dir)
+        if account is not None:
+            ImapReader(self._db, self._data_dir).ingest(
+                account.host,
+                account.port,
+                account.user,
+                account.password,
+            )
+        if session_ready(whatsapp_session(self._data_dir)):
+            WhatsAppReader(self._db, self._data_dir).ingest()
+
+    def _dispatch_approved(self, draft_id: int, channel: str) -> bool:
+        if channel == "email":
+            account = load_mail_account(self._data_dir)
+            if account is None:
+                return False
+            return SmtpSender(self._db).send(
+                draft_id,
+                account.host,
+                account.port,
+                account.user,
+                account.password,
+            )
+        if channel == "whatsapp":
+            if not session_ready(whatsapp_session(self._data_dir)):
+                return False
+            return WhatsAppSender(self._db, self._data_dir).send(draft_id)
+        return False
+
+    def _watch_qr(self) -> None:
+        try:
+            session = whatsapp_session(self._data_dir)
+        except ValueError:
+            return
+        ready = session_ready(session)
+        image = session / "qr.png"
+        uri = image.resolve().as_uri() if image.is_file() else ""
+        if uri == self._qr_image and ready == self._session_ready:
+            return
+        self._qr_image = uri
+        self._session_ready = ready
+        self.surfaceChanged.emit()
 
     @Property(str, constant=True)
     def dataDirectory(self) -> str:
@@ -57,6 +134,16 @@ class Controller(QObject):
     @Property(QObject, constant=True)
     def processes(self) -> QObject:
         return self._processes
+
+    @Property(str, notify=surfaceChanged)
+    def whatsappNotice(self) -> str:
+        if self._session_ready:
+            return ""
+        return _STOPPED
+
+    @Property(str, notify=surfaceChanged)
+    def qrImage(self) -> str:
+        return self._qr_image
 
     @Slot(int, result=bool)
     def approve(self, draft_id: int) -> bool:
@@ -165,9 +252,24 @@ class Controller(QObject):
         self._reload()
         return True
 
+    @Slot()
     def pair_whatsapp(self, runner=None) -> None:
-        """Grava a sessão Web uma vez, fora da pasta de documentos."""
-        pair(self._data_dir, runner)
+        """Pede o QR e grava a sessão fora da pasta de documentos."""
+        if runner is not None:
+            pair(self._data_dir, runner)
+            self._watch_qr()
+            return
+        if self._pairing:
+            return
+        self._pairing = True
+
+        def work() -> None:
+            try:
+                pair(self._data_dir, None)
+            finally:
+                self._pairing = False
+
+        threading.Thread(target=work, daemon=True).start()
 
     def classify_entry(self, entry_id: int) -> str:
         """Classifica uma entrada. A janela não chama este método."""
@@ -194,6 +296,7 @@ class Controller(QObject):
             query=query,
         )
 
+    @Slot(str, result=int)
     def search(self, phrase: str, transport=None) -> int:
         """Busca trechos do cliente citado e grava o rascunho. Não envia."""
         hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
@@ -202,12 +305,16 @@ class Controller(QObject):
 
     def run_cycle(self, now, dispatch=None, config=None):
         """Monta a fila no horário e envia o que já foi aprovado. Fora dele, não envia."""
-        queue = DayCycle(self._db, self._data_dir, config).run(now, dispatch)
+        queue = DayCycle(self._db, self._data_dir, config).run(now, dispatch, self._collect)
         if queue.ran:
             self._reload()
         return queue
 
     def close(self) -> None:
+        if self._clock is not None:
+            self._clock.stop()
+        if self._qr_clock is not None:
+            self._qr_clock.stop()
         self._db.close()
 
     def _exists(self, table: str, row_id: int) -> bool:

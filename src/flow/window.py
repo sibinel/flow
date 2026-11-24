@@ -33,6 +33,7 @@ def open_window(data_root: Path | None = None):
     app = QGuiApplication.instance() or QGuiApplication(sys.argv)
     engine = QQmlApplicationEngine()
     controller = Controller(data_root)
+    controller.watch_schedule()
     engine.rootContext().setContextProperty("controller", controller)
     engine.load(qml_file())
     return app, engine, controller

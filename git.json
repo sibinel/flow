@@ -1,14 +1,14 @@
 {
-  "commit": "2efa6b5798f8969409e3581c5f81a46480107574",
-  "abbreviated_commit": "2efa6b5",
-  "tree": "648d3af255cb1c304f25c4446507b0a8efd9d6a5",
-  "abbreviated_tree": "648d3af",
-  "parent": "bc40e1527c746a577747887692e290dc066d56e3",
-  "abbreviated_parent": "bc40e15",
+  "commit": "86ccc6489e6f047a72e5c1a2733f96745a5e11cb",
+  "abbreviated_commit": "86ccc64",
+  "tree": "543f4ffc2ecb74aeabb2fe29a8f4bcc25c86ce36",
+  "abbreviated_tree": "543f4ff",
+  "parent": "86efb857c0d107c7e80009d0e7594f13d7eef775",
+  "abbreviated_parent": "86efb85",
   "refs": "HEAD -> main",
   "encoding": "",
-  "subject": "grok: envio só é gravado pelo ciclo",
-  "sanitized_subject_line": "grok-envio-s-gravado-pelo-ciclo",
+  "subject": "grok: janela liga ciclo busca e pareamento",
+  "sanitized_subject_line": "grok-janela-liga-ciclo-busca-e-pareamento",
   "body": "",
   "commit_notes": "",
   "verification_flag": "N",
@@ -17,11 +17,11 @@
   "author": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Tue, 24 Nov 2026 19:52:15 -0300"
+    "date": "Tue, 24 Nov 2026 20:16:26 -0300"
   },
   "commiter": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Tue, 24 Nov 2026 19:52:15 -0300"
+    "date": "Tue, 24 Nov 2026 20:16:26 -0300"
   }
 }

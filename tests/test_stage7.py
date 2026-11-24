@@ -324,6 +324,8 @@ class WhatsAppSessionTest(unittest.TestCase):
     def test_window_does_not_open_whatsapp(self) -> None:
         qml = (package_dir() / "qml" / "Main.qml").read_text(encoding="utf-8").lower()
         window = (package_dir() / "window.py").read_text(encoding="utf-8").lower()
-        for banned in ("baileys", "ingest_whatsapp", "send_approved_whatsapp", "pair_whatsapp"):
+        for banned in ("baileys", "ingest_whatsapp", "send_approved_whatsapp"):
             self.assertNotIn(banned, qml)
             self.assertNotIn(banned, window)
+        self.assertIn("controller.pair_whatsapp()", qml)
+        self.assertNotIn("pair_whatsapp", window)

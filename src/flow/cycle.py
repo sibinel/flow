@@ -83,12 +83,14 @@ class DayCycle:
         self.config = config or load_config(self._data_dir)
         save_config(self._data_dir, self.config)
 
-    def run(self, now: datetime, dispatch=None) -> CycleQueue:
-        """Monta a fila e envia o que já foi aprovado. Fora do horário, não envia."""
+    def run(self, now: datetime, dispatch=None, collect=None) -> CycleQueue:
+        """No horário, coleta, monta a fila e envia o aprovado. Fora dele, não envia."""
         slot = self._open_slot(now)
         if slot is None or self._done(now, slot):
             return CycleQueue((), (), False, ())
         try:
+            if collect is not None:
+                collect()
             sent = self._execute(now, dispatch)
             drafts, pendings = self._queue(now)
             self._db.commit()

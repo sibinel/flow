@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import imaplib
+import json
 import sqlite3
+from dataclasses import dataclass
 from email import message_from_bytes
 from email import policy
 from email.utils import parseaddr
@@ -101,3 +103,34 @@ def _parts(message) -> tuple[str, list[tuple[str, bytes]]]:
         content = message.get_content()
         body = content if isinstance(content, str) else str(content)
     return body.strip(), attachments
+
+
+@dataclass(frozen=True)
+class MailAccount:
+    host: str
+    port: int
+    user: str
+    password: str
+
+
+def load_mail_account(data_dir: Path) -> MailAccount | None:
+    """Conta de e-mail no disco. Sem o arquivo, a coleta não corre."""
+    path = Path(data_dir) / "email.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    host = str(data.get("host") or "").strip()
+    user = str(data.get("user") or "").strip()
+    password = data.get("password")
+    try:
+        port = int(data["port"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not host or not user or not isinstance(password, str) or password == "" or port <= 0:
+        return None
+    return MailAccount(host, port, user, password)
