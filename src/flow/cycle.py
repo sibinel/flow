@@ -181,7 +181,12 @@ class DayCycle:
             if not _at_or_before(row["recebido_em"], now):
                 continue
             draft_id = int(row["id"])
-            dispatch(draft_id, row["tipo"])
+            if _already_sent(self._db, draft_id):
+                continue
+            if dispatch(draft_id, row["tipo"]) is not True:
+                continue
+            if _already_sent(self._db, draft_id):
+                continue
             sent_at = _at(now, now.strftime("%H:%M")).isoformat(timespec="seconds")
             self._db.execute(
                 """
@@ -223,6 +228,14 @@ class DayCycle:
             if _at_or_before(row["recebido_em"], now):
                 pendings.append(int(row["id"]))
         return tuple(drafts), tuple(pendings)
+
+
+def _already_sent(connection: sqlite3.Connection, draft_id: int) -> bool:
+    found = connection.execute(
+        "SELECT 1 FROM envio WHERE rascunho_id = ?",
+        (draft_id,),
+    ).fetchone()
+    return found is not None
 
 
 def _at(now: datetime, slot: str) -> datetime:

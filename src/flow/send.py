@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 import smtplib
-from datetime import datetime
 from email.message import EmailMessage
 
 
@@ -23,6 +22,9 @@ class SmtpSender:
         return (self._tool.name,)
 
     def send(self, draft_id: int, host: str, port: int, sender: str, password: str) -> bool:
+        """Entrega e diz se saiu. Não grava envio nem marca o rascunho."""
+        if _already_sent(self._db, draft_id):
+            return False
         row = self._db.execute(
             """
             SELECT rascunho.texto, rascunho.estado, contato.valor
@@ -37,17 +39,6 @@ class SmtpSender:
             return False
         self._tool = SendTool()
         _deliver(host, port, sender, row["valor"], row["texto"], password)
-        self._db.execute(
-            """
-            INSERT INTO envio (rascunho_id, enviado_em, canal)
-            VALUES (?, ?, 'email')
-            """,
-            (draft_id, datetime.now().astimezone().isoformat(timespec="seconds")),
-        )
-        self._db.execute(
-            "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
-            (draft_id,),
-        )
         return True
 
 
@@ -62,6 +53,14 @@ def _deliver(
         if host != "127.0.0.1":
             smtp.login(sender, password)
         smtp.send_message(message)
+
+
+def _already_sent(connection: sqlite3.Connection, draft_id: int) -> bool:
+    found = connection.execute(
+        "SELECT 1 FROM envio WHERE rascunho_id = ?",
+        (draft_id,),
+    ).fetchone()
+    return found is not None
 
 
 def _smtp(host: str, port: int):

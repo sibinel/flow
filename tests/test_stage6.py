@@ -6,6 +6,7 @@ import socket
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from unittest.mock import patch
 from pathlib import Path
 
@@ -134,10 +135,9 @@ class SmtpSenderTest(unittest.TestCase):
             "SELECT estado FROM rascunho WHERE id = ?",
             (draft,),
         ).fetchone()["estado"]
-        self.assertEqual(saved["canal"], "email")
-        self.assertTrue(saved["enviado_em"])
-        self.assertEqual(state, "enviado")
-        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
+        self.assertIsNone(saved)
+        self.assertEqual(state, "aprovado")
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
         self.assertTrue(server.messages)
         self.assertIn(
             "Confirmo o recebimento?",
@@ -205,6 +205,66 @@ class SmtpSenderTest(unittest.TestCase):
                 ("login", "escritorio@flow.local", "segredo"),
                 ("data", "escritorio@flow.local", "ana.lima@email.com"),
             ],
+        )
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
+        self.assertEqual(
+            self.db.execute("SELECT estado FROM rascunho WHERE id = ?", (draft,)).fetchone()["estado"],
+            "aprovado",
+        )
+
+    def test_cycle_and_sender_record_one_row(self) -> None:
+        client = self.db.execute(
+            "INSERT INTO cliente (nome, status) VALUES ('Ana Lima', 'cliente')"
+        ).lastrowid
+        contact = self.db.execute(
+            "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'email', 'ana.lima@email.com')",
+            (client,),
+        ).lastrowid
+        entry = self.db.execute(
+            """
+            INSERT INTO entrada (
+                cliente_id, contato_id, recebido_em, texto, estado
+            ) VALUES (?, ?, '2026-11-22T09:00:00', 'contrato', 'arquivada')
+            """,
+            (client, contact),
+        ).lastrowid
+        draft = self.db.execute(
+            """
+            INSERT INTO rascunho (entrada_id, texto, estado)
+            VALUES (?, 'Ana, confirmo.', 'aprovado')
+            """,
+            (entry,),
+        ).lastrowid
+        self.db.commit()
+        server = FakeSmtp()
+        sender = SmtpSender(self.controller._db)
+
+        def dispatch(draft_id: int, channel: str) -> bool:
+            self.assertEqual(channel, "email")
+            return sender.send(
+                draft_id, "127.0.0.1", server.port, "escritorio@flow.local", "segredo"
+            )
+
+        try:
+            sent = self.controller.run_cycle(datetime(2026, 11, 23, 8, 0), dispatch)
+            self.assertEqual(sent.sent, (draft,))
+            self.assertFalse(
+                sender.send(draft, "127.0.0.1", server.port, "escritorio@flow.local", "segredo")
+            )
+            again = self.controller.run_cycle(datetime(2026, 11, 24, 8, 0), dispatch)
+        finally:
+            server.close()
+
+        self.assertEqual(again.sent, ())
+        self.assertEqual(len(server.messages), 1)
+        rows = self.db.execute(
+            "SELECT canal FROM envio WHERE rascunho_id = ?",
+            (draft,),
+        ).fetchall()
+        self.assertEqual([row["canal"] for row in rows], ["email"])
+        self.assertEqual(
+            self.db.execute("SELECT estado FROM rascunho WHERE id = ?", (draft,)).fetchone()["estado"],
+            "enviado",
         )
 
     def test_window_does_not_send(self) -> None:

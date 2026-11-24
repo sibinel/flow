@@ -1,14 +1,14 @@
 {
-  "commit": "0d39486f2b8353142be6fdbe03c53368b9586e8e",
-  "abbreviated_commit": "0d39486",
-  "tree": "7200e256dec0991f02cd60c61a2f21ecbdd6be79",
-  "abbreviated_tree": "7200e25",
-  "parent": "d4d9fdc401639155e94f1ba8baafd01459c1e4c0",
-  "abbreviated_parent": "d4d9fdc",
+  "commit": "2efa6b5798f8969409e3581c5f81a46480107574",
+  "abbreviated_commit": "2efa6b5",
+  "tree": "648d3af255cb1c304f25c4446507b0a8efd9d6a5",
+  "abbreviated_tree": "648d3af",
+  "parent": "bc40e1527c746a577747887692e290dc066d56e3",
+  "abbreviated_parent": "bc40e15",
   "refs": "HEAD -> main",
   "encoding": "",
-  "subject": "grok: imap e smtp cifram fora do loopback",
-  "sanitized_subject_line": "grok-imap-e-smtp-cifram-fora-do-loopback",
+  "subject": "grok: envio só é gravado pelo ciclo",
+  "sanitized_subject_line": "grok-envio-s-gravado-pelo-ciclo",
   "body": "",
   "commit_notes": "",
   "verification_flag": "N",
@@ -17,11 +17,11 @@
   "author": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Tue, 24 Nov 2026 19:33:55 -0300"
+    "date": "Tue, 24 Nov 2026 19:52:15 -0300"
   },
   "commiter": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Tue, 24 Nov 2026 19:33:55 -0300"
+    "date": "Tue, 24 Nov 2026 19:52:15 -0300"
   }
 }

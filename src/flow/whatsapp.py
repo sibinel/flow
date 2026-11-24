@@ -13,7 +13,6 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from flow.paths import document_target, package_dir, whatsapp_session
@@ -113,6 +112,9 @@ class WhatsAppSender:
         return (self._tool.name,)
 
     def send(self, draft_id: int) -> bool:
+        """Entrega e diz se saiu. Não grava envio nem marca o rascunho."""
+        if _already_sent(self._db, draft_id):
+            return False
         row = self._db.execute(
             """
             SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor
@@ -128,18 +130,15 @@ class WhatsAppSender:
         session = _require_session(self._data_dir)
         self._tool = SendTool()
         self._runner(session, "send", {"to": row["valor"], "text": row["texto"]})
-        self._db.execute(
-            """
-            INSERT INTO envio (rascunho_id, enviado_em, canal)
-            VALUES (?, ?, 'whatsapp')
-            """,
-            (draft_id, datetime.now().astimezone().isoformat(timespec="seconds")),
-        )
-        self._db.execute(
-            "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
-            (draft_id,),
-        )
         return True
+
+
+def _already_sent(connection: sqlite3.Connection, draft_id: int) -> bool:
+    found = connection.execute(
+        "SELECT 1 FROM envio WHERE rascunho_id = ?",
+        (draft_id,),
+    ).fetchone()
+    return found is not None
 
 
 def invoke(session: Path, op: str, payload: dict | None = None) -> dict:

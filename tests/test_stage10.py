@@ -51,8 +51,9 @@ class DayCycleTest(unittest.TestCase):
         self.controller.close()
         self.tmp.cleanup()
 
-    def _dispatch(self, draft_id: int, channel: str) -> None:
+    def _dispatch(self, draft_id: int, channel: str) -> bool:
         self.calls.append((draft_id, channel))
+        return True
 
     def _config(self) -> dict:
         path = Path(self.controller.dataDirectory) / "ciclo.json"
@@ -265,6 +266,73 @@ class DayCycleTest(unittest.TestCase):
         self.assertEqual(set(opened.fila()), {"rascunho", "pendencia"})
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
         self.assertEqual(self._config()["ultimo"], "2026-11-23T07:15:00")
+
+    def test_false_does_not_record_and_an_existing_envio_is_not_repeated(self) -> None:
+        bruno = _client(self.db, "Bruno Dias")
+        email = _contact(self.db, bruno, "email", "bruno.dias@email.com")
+        entry = _entry(
+            self.db,
+            bruno,
+            email,
+            "Pode confirmar.",
+            "2026-11-22T09:00:00",
+            "arquivada",
+        )
+        draft = self.db.execute(
+            """
+            INSERT INTO rascunho (entrada_id, texto, estado)
+            VALUES (?, 'Bruno, confirmo.', 'aprovado')
+            """,
+            (entry,),
+        ).lastrowid
+        self.db.commit()
+        calls: list[object] = []
+
+        def refuse(draft_id: int, channel: str) -> bool:
+            calls.append(("no", draft_id, channel))
+            return False
+
+        refused = self.controller.run_cycle(datetime(2026, 11, 23, 8, 0), refuse)
+        self.assertTrue(refused.ran)
+        self.assertEqual(refused.sent, ())
+        self.assertEqual(calls, [("no", draft, "email")])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
+        self.assertEqual(
+            self.db.execute("SELECT estado FROM rascunho WHERE id = ?", (draft,)).fetchone()["estado"],
+            "aprovado",
+        )
+
+        def accept(draft_id: int, channel: str) -> bool:
+            calls.append(("yes", draft_id, channel))
+            return True
+
+        accepted = self.controller.run_cycle(datetime(2026, 11, 24, 8, 0), accept)
+        self.assertEqual(accepted.sent, (draft,))
+        self.assertEqual(calls, [("no", draft, "email"), ("yes", draft, "email")])
+        rows = self.db.execute(
+            "SELECT canal FROM envio WHERE rascunho_id = ?",
+            (draft,),
+        ).fetchall()
+        self.assertEqual([row["canal"] for row in rows], ["email"])
+        self.assertEqual(
+            self.db.execute("SELECT estado FROM rascunho WHERE id = ?", (draft,)).fetchone()["estado"],
+            "enviado",
+        )
+
+        self.db.execute(
+            "UPDATE rascunho SET estado = 'aprovado' WHERE id = ?",
+            (draft,),
+        )
+        self.db.commit()
+
+        def again(draft_id: int, channel: str) -> bool:
+            calls.append(("again", draft_id, channel))
+            return True
+
+        repeated = self.controller.run_cycle(datetime(2026, 11, 25, 8, 0), again)
+        self.assertEqual(repeated.sent, ())
+        self.assertEqual(calls, [("no", draft, "email"), ("yes", draft, "email")])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
 
 
 class WindowDoesNotRunTheCycleTest(unittest.TestCase):

@@ -231,8 +231,8 @@ class WhatsAppSessionTest(unittest.TestCase):
             "SELECT estado FROM rascunho WHERE id = ?",
             (self.draft,),
         ).fetchone()["estado"]
-        self.assertEqual(recorded["canal"], "whatsapp")
-        self.assertEqual(state, "enviado")
+        self.assertIsNone(recorded)
+        self.assertEqual(state, "aprovado")
         self.assertFalse((docs / "creds.json").exists())
         self.assertTrue((session / "creds.json").is_file())
 
