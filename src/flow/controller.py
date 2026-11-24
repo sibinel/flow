@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, Slot
 
 from flow.classify import Classifier, ReadTool
+from flow.harness import Harness
 from flow.llm import CloudLLM
 from flow.mail import ImapReader
 from flow.paths import ensure_user_data
@@ -189,6 +190,12 @@ class Controller(QObject):
             message=message,
             query=query,
         )
+
+    def search(self, phrase: str, transport=None) -> int:
+        """Busca trechos do cliente citado e grava o rascunho. Não envia."""
+        hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
+        self._reload()
+        return hit.draft_id
 
     def close(self) -> None:
         self._db.close()

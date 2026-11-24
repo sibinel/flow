@@ -1,14 +1,14 @@
 {
-  "commit": "a46b5b71618b0de51a6f1ec726645823da4e6e60",
-  "abbreviated_commit": "a46b5b7",
-  "tree": "ac9360dcf02cdbdf84e696ae8eafb0ad22177ad5",
-  "abbreviated_tree": "ac9360d",
-  "parent": "9375acb217b0c47d18d4c2c7916af46ca978886e",
-  "abbreviated_parent": "9375acb",
+  "commit": "27fe15bc5dc891e91cfe6f7cb5098de2033d50d1",
+  "abbreviated_commit": "27fe15b",
+  "tree": "71e9fe69c6652e08fb3d47b9db6eea41043bbe77",
+  "abbreviated_tree": "71e9fe6",
+  "parent": "b9a897eb40a47d3cd5970f16fbb09cf6e8e2ebe9",
+  "abbreviated_parent": "b9a897e",
   "refs": "HEAD -> main",
   "encoding": "",
-  "subject": "grok: llm na nuvem só com o pedaço da tarefa",
-  "sanitized_subject_line": "grok-llm-na-nuvem-s-com-o-peda-o-da-tarefa",
+  "subject": "grok: busca fts5 só no cliente da vez",
+  "sanitized_subject_line": "grok-busca-fts5-s-no-cliente-da-vez",
   "body": "",
   "commit_notes": "",
   "verification_flag": "N",
@@ -17,11 +17,11 @@
   "author": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Mon, 23 Nov 2026 21:49:31 -0300"
+    "date": "Mon, 23 Nov 2026 21:51:36 -0300"
   },
   "commiter": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Mon, 23 Nov 2026 21:49:31 -0300"
+    "date": "Mon, 23 Nov 2026 21:51:36 -0300"
   }
 }
