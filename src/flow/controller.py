@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, Slot
 
 from flow.classify import Classifier, ReadTool
+from flow.llm import CloudLLM
 from flow.mail import ImapReader
 from flow.paths import ensure_user_data
 from flow.send import SmtpSender
@@ -170,6 +171,24 @@ class Controller(QObject):
         self._db.commit()
         self._reload()
         return result
+
+    def complete_model(
+        self,
+        task: str,
+        entry_id: int = 0,
+        client_id: int = 0,
+        message: str = "",
+        query: str = "",
+        transport=None,
+    ) -> str:
+        """Chama o modelo com o pedaço da tarefa. Não envia."""
+        return CloudLLM(self._db, transport=transport).complete(
+            task,
+            entry_id=entry_id,
+            client_id=client_id,
+            message=message,
+            query=query,
+        )
 
     def close(self) -> None:
         self._db.close()

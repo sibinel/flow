@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -254,5 +255,27 @@ def search_trechos(connection: sqlite3.Connection, query: str) -> list[sqlite3.R
             WHERE trecho_fts MATCH ?
             """,
             (query,),
+        )
+    )
+
+
+def search_trechos_do_cliente(
+    connection: sqlite3.Connection, client_id: int, query: str
+) -> list[sqlite3.Row]:
+    """FTS5 só nos trechos daquele cliente. Outro cliente não entra."""
+    tokens = re.findall(r"\w+", query, flags=re.UNICODE)
+    if client_id <= 0 or not tokens:
+        return []
+    return list(
+        connection.execute(
+            """
+            SELECT trecho.id, trecho.cliente_id, trecho.entrada_id,
+                   trecho.canal, trecho.quando, trecho.texto
+            FROM trecho_fts
+            JOIN trecho ON trecho.id = trecho_fts.rowid
+            WHERE trecho_fts MATCH ? AND trecho.cliente_id = ?
+            ORDER BY trecho.id
+            """,
+            (" ".join(tokens), client_id),
         )
     )
