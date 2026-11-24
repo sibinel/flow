@@ -25,7 +25,7 @@ class Controller(QObject):
         self._db = open_database(self._data_dir)
         if data_root is None:
             ensure_demo(self._db)
-        self._drafts = RecordModel(["draftId", "text"])
+        self._drafts = RecordModel(["draftId", "text", "address", "channel"])
         self._pendings = RecordModel(["entryId", "text", "reason"])
         self._clients = RecordModel(["clientId", "name"])
         self._processes = RecordModel(["processId", "label"])
@@ -220,11 +220,20 @@ class Controller(QObject):
     def _reload(self) -> None:
         self._drafts.replace(
             [
-                {"draftId": row["id"], "text": row["texto"]}
+                {
+                    "draftId": row["id"],
+                    "text": row["texto"],
+                    "address": row["valor"],
+                    "channel": row["tipo"],
+                }
                 for row in self._db.execute(
                     """
-                    SELECT id, texto FROM rascunho
-                    WHERE estado = 'aguardando' ORDER BY id
+                    SELECT rascunho.id, rascunho.texto, contato.valor, contato.tipo
+                    FROM rascunho
+                    JOIN entrada ON entrada.id = rascunho.entrada_id
+                    JOIN contato ON contato.id = entrada.contato_id
+                    WHERE rascunho.estado = 'aguardando'
+                    ORDER BY rascunho.id
                     """
                 )
             ]

@@ -142,6 +142,43 @@ class QueueTest(unittest.TestCase):
         self.assertIn("1111", label)
         self.assertNotIn("2222", label)
 
+    def test_draft_card_exposes_the_entry_contact_address_and_channel(self) -> None:
+        with open_database(self.controller.database_path.parent) as connection:
+            owner = _client(connection, "Ana Lima")
+            other = _client(connection, "Bruno Dias")
+            _contact(connection, other)
+            contact = connection.execute(
+                "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, 'email', ?)",
+                (owner, "ana.lima@email.com"),
+            ).lastrowid
+            entry = _entry(connection, contact, "segue o contrato")
+            connection.execute(
+                """
+                INSERT INTO rascunho (entrada_id, texto, estado)
+                VALUES (?, 'Ana, confirmo o recebimento.', 'aguardando')
+                """,
+                (entry,),
+            )
+            connection.commit()
+
+        self.controller._reload()
+        self.assertEqual(self.controller.drafts.rowCount(), 1)
+        roles = {
+            bytes(name): role
+            for role, name in self.controller.drafts.roleNames().items()
+        }
+        index = self.controller.drafts.index(0, 0)
+        self.assertEqual(self.controller.drafts.data(index, roles[b"text"]), "Ana, confirmo o recebimento.")
+        self.assertEqual(self.controller.drafts.data(index, roles[b"address"]), "ana.lima@email.com")
+        self.assertEqual(self.controller.drafts.data(index, roles[b"channel"]), "email")
+
+        qml = (package_dir() / "qml" / "Main.qml").read_text(encoding="utf-8")
+        self.assertIn("draftCard.address", qml)
+        self.assertIn("draftCard.channel", qml)
+        calls = set(re.findall(r"controller\.(\w+)", qml))
+        self.assertNotIn("send", calls)
+        self.assertFalse(any(name.startswith("send") for name in calls))
+
 
 class WindowCallsOnlyTheControllerTest(unittest.TestCase):
     def test_qml_and_window_do_not_touch_store_model_or_channel(self) -> None:

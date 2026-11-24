@@ -1,14 +1,14 @@
 {
-  "commit": "3794f54336d4c875f9e7f99ce3444e67668ecba1",
-  "abbreviated_commit": "3794f54",
-  "tree": "8b4bb7788c7277fc267ef76472b9072d33c2b4ba",
-  "abbreviated_tree": "8b4bb77",
-  "parent": "306c8b480adeb0632e6bb1a18167539baaa7e940",
-  "abbreviated_parent": "306c8b4",
+  "commit": "91fee6fb48d1b9ea505fb7830900b3fdb4e231d8",
+  "abbreviated_commit": "91fee6f",
+  "tree": "259cb886c32db8d0b63d52950f91fbf1d5e26ed9",
+  "abbreviated_tree": "259cb88",
+  "parent": "9e5891d10eca4f5a2e1a1e00b468e51e3dde3df9",
+  "abbreviated_parent": "9e5891d",
   "refs": "HEAD -> main",
   "encoding": "",
-  "subject": "grok: ciclo da manhã só envia no horário",
-  "sanitized_subject_line": "grok-ciclo-da-manh-s-envia-no-hor-rio",
+  "subject": "grok: rascunho mostra endereço e canal",
+  "sanitized_subject_line": "grok-rascunho-mostra-endere-o-e-canal",
   "body": "",
   "commit_notes": "",
   "verification_flag": "N",
@@ -17,11 +17,11 @@
   "author": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Mon, 23 Nov 2026 21:56:03 -0300"
+    "date": "Tue, 24 Nov 2026 12:20:15 -0300"
   },
   "commiter": {
     "name": "Roger",
     "email": "roger@sibinel.com",
-    "date": "Mon, 23 Nov 2026 21:56:03 -0300"
+    "date": "Tue, 24 Nov 2026 12:20:15 -0300"
   }
 }

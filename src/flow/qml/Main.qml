@@ -113,6 +113,8 @@ ApplicationWindow {
                                 id: draftCard
                                 required property int draftId
                                 required property string text
+                                required property string address
+                                required property string channel
                                 width: draftsView.width
                                 implicitHeight: Math.max(draftRow.implicitHeight + 20, 64)
                                 radius: 10
@@ -129,12 +131,31 @@ ApplicationWindow {
                                     anchors.margins: 12
                                     spacing: 16
 
-                                    Label {
-                                        text: draftCard.text
-                                        color: "#fafaf9"
-                                        font.pixelSize: 15
-                                        wrapMode: Text.WordWrap
+                                    ColumnLayout {
                                         Layout.fillWidth: true
+                                        spacing: 4
+
+                                        Label {
+                                            text: draftCard.text
+                                            color: "#fafaf9"
+                                            font.pixelSize: 15
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: draftCard.address
+                                            color: "#d6d3d1"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: draftCard.channel
+                                            color: "#a8a29e"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
                                     }
                                     Button {
                                         text: "Aprovar"
