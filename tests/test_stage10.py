@@ -1,0 +1,276 @@
+"""Etapa 10: o ciclo da manhã monta a fila. Fora do horário, nada sai."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from datetime import datetime
+from pathlib import Path
+
+from flow.controller import Controller
+from flow.cycle import CycleConfig
+from flow.paths import package_dir
+from flow.store import open_database
+
+
+def _client(connection, name: str) -> int:
+    return connection.execute(
+        "INSERT INTO cliente (nome, status) VALUES (?, 'cliente')",
+        (name,),
+    ).lastrowid
+
+
+def _contact(connection, client_id: int, kind: str, value: str) -> int:
+    return connection.execute(
+        "INSERT INTO contato (cliente_id, tipo, valor) VALUES (?, ?, ?)",
+        (client_id, kind, value),
+    ).lastrowid
+
+
+def _entry(connection, client_id, contact_id: int, text: str, when: str, state: str) -> int:
+    return connection.execute(
+        """
+        INSERT INTO entrada (
+            cliente_id, contato_id, processo_id, recebido_em, texto, estado
+        ) VALUES (?, ?, NULL, ?, ?, ?)
+        """,
+        (client_id, contact_id, when, text, state),
+    ).lastrowid
+
+
+class DayCycleTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.controller = Controller(Path(self.tmp.name))
+        self.db = open_database(self.controller.database_path.parent)
+        self.calls: list[tuple[int, str]] = []
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self.controller.close()
+        self.tmp.cleanup()
+
+    def _dispatch(self, draft_id: int, channel: str) -> None:
+        self.calls.append((draft_id, channel))
+
+    def _config(self) -> dict:
+        path = Path(self.controller.dataDirectory) / "ciclo.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_cycle_queues_followup_and_filing_and_holds_the_rest(self) -> None:
+        bruno = _client(self.db, "Bruno Dias")
+        email = _contact(self.db, bruno, "email", "bruno.dias@email.com")
+        phone = _contact(self.db, bruno, "whatsapp", "+5511987654321")
+        process = self.db.execute(
+            'INSERT INTO processo (cliente_id, "número", "título") VALUES (?, ?, ?)',
+            (bruno, "1001234-55.2024.8.26.0100", "Rescisão"),
+        ).lastrowid
+        approved_entry = _entry(
+            self.db,
+            bruno,
+            email,
+            "Contrato recebido ontem.",
+            "2026-11-22T09:00:00",
+            "arquivada",
+        )
+        approved = self.db.execute(
+            """
+            INSERT INTO rascunho (entrada_id, texto, estado)
+            VALUES (?, 'Bruno, confirmo o recebimento.', 'aprovado')
+            """,
+            (approved_entry,),
+        ).lastrowid
+        clean_text = "Bruno, segue a petição da rescisão."
+        clean = _entry(self.db, None, phone, clean_text, "2026-11-23T07:00:00", "nova")
+        filing_text = "Segue o contrato assinado para arquivar."
+        filing = _entry(self.db, None, phone, filing_text, "2026-11-23T07:30:00", "nova")
+        docs = Path(self.controller.dataDirectory) / "documentos"
+        docs.mkdir()
+        stored = docs / "contrato.pdf"
+        stored.write_bytes(b"%PDF-1.4 contrato")
+        self.db.execute(
+            "INSERT INTO documento (entrada_id, caminho, nome) VALUES (?, ?, 'contrato.pdf')",
+            (filing, str(stored)),
+        )
+        later_text = "Mensagem da tarde, sem processo."
+        later = _entry(self.db, None, phone, later_text, "2026-11-23T09:30:00", "nova")
+        self.db.commit()
+
+        afternoon = datetime(2026, 11, 23, 15, 0)
+        held = self.controller.run_cycle(afternoon, self._dispatch)
+        self.assertFalse(held.ran)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
+        self.assertEqual(
+            self.db.execute("SELECT estado FROM entrada WHERE id = ?", (clean,)).fetchone()["estado"],
+            "nova",
+        )
+        saved = self._config()
+        self.assertEqual(saved["quantidade"], 1)
+        self.assertEqual(saved["horarios"], ["08:00"])
+        self.assertNotIn("ultimo", saved)
+
+        morning = datetime(2026, 11, 23, 8, 0)
+        result = self.controller.run_cycle(morning, self._dispatch)
+        fila = result.fila()
+        follow = self.db.execute(
+            "SELECT id, texto, estado FROM rascunho WHERE entrada_id = ?",
+            (clean,),
+        ).fetchone()
+        pending = self.db.execute(
+            """
+            SELECT pendencia.id, pendencia.motivo, entrada.estado,
+                   entrada.cliente_id, entrada.processo_id
+            FROM pendencia
+            JOIN entrada ON entrada.id = pendencia.entrada_id
+            WHERE pendencia.entrada_id = ?
+            """,
+            (filing,),
+        ).fetchone()
+        document = self.db.execute(
+            "SELECT caminho, nome FROM documento WHERE entrada_id = ?",
+            (filing,),
+        ).fetchone()
+
+        self.assertTrue(result.ran)
+        self.assertEqual(set(fila), {"rascunho", "pendencia"})
+        self.assertEqual(follow["estado"], "aguardando")
+        self.assertIn("Retorno sobre:", follow["texto"])
+        self.assertIn(clean_text, follow["texto"])
+        self.assertNotIn(later_text, follow["texto"])
+        self.assertIn(follow["id"], fila["rascunho"])
+        self.assertEqual(pending["motivo"], "processo não citado")
+        self.assertEqual(pending["estado"], "pendente")
+        self.assertIsNone(pending["cliente_id"])
+        self.assertIsNone(pending["processo_id"])
+        self.assertIn(pending["id"], fila["pendencia"])
+        self.assertEqual(document["nome"], "contrato.pdf")
+        self.assertEqual(Path(document["caminho"]).read_bytes(), b"%PDF-1.4 contrato")
+        for draft_id in fila["rascunho"]:
+            state = self.db.execute(
+                "SELECT estado FROM rascunho WHERE id = ?",
+                (draft_id,),
+            ).fetchone()["estado"]
+            self.assertEqual(state, "aguardando")
+        for pending_id in fila["pendencia"]:
+            self.assertIsNotNone(
+                self.db.execute(
+                    "SELECT 1 FROM pendencia WHERE id = ?",
+                    (pending_id,),
+                ).fetchone()
+            )
+        self.assertNotIn(approved, fila["rascunho"])
+        self.assertNotIn(follow["id"], result.sent)
+        self.assertEqual(self.calls, [(approved, "email")])
+        self.assertEqual(
+            self.db.execute(
+                "SELECT estado FROM rascunho WHERE id = ?",
+                (approved,),
+            ).fetchone()["estado"],
+            "enviado",
+        )
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
+        later_row = self.db.execute(
+            "SELECT estado FROM entrada WHERE id = ?",
+            (later,),
+        ).fetchone()
+        self.assertEqual(later_row["estado"], "nova")
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT 1 FROM rascunho WHERE entrada_id = ?",
+                (later,),
+            ).fetchone()
+        )
+        self.assertIsNone(
+            self.db.execute(
+                "SELECT 1 FROM pendencia WHERE entrada_id = ?",
+                (later,),
+            ).fetchone()
+        )
+
+        self.assertTrue(self.controller.indicate(filing, bruno, process))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
+        self.assertTrue(self.controller.approve(follow["id"]))
+        self.calls.clear()
+        again = self.controller.run_cycle(morning, self._dispatch)
+        self.assertFalse(again.ran)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(
+            self.db.execute(
+                "SELECT estado FROM rascunho WHERE id = ?",
+                (follow["id"],),
+            ).fetchone()["estado"],
+            "aprovado",
+        )
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
+
+        nxt = self.controller.run_cycle(datetime(2026, 11, 24, 8, 0), self._dispatch)
+        self.assertTrue(nxt.ran)
+        self.assertEqual(set(nxt.fila()), {"rascunho", "pendencia"})
+        self.assertEqual(self.calls, [(follow["id"], "whatsapp")])
+        self.assertNotIn(follow["id"], nxt.fila()["rascunho"])
+        self.assertEqual(
+            self.db.execute(
+                "SELECT estado FROM rascunho WHERE id = ?",
+                (follow["id"],),
+            ).fetchone()["estado"],
+            "enviado",
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT estado FROM entrada WHERE id = ?",
+                (later,),
+            ).fetchone()["estado"],
+            "pendente",
+        )
+        waited = self.db.execute(
+            "SELECT id FROM pendencia WHERE entrada_id = ?",
+            (later,),
+        ).fetchone()["id"]
+        self.assertIn(waited, nxt.fila()["pendencia"])
+
+    def test_only_the_configured_time_sends(self) -> None:
+        bruno = _client(self.db, "Bruno Dias")
+        email = _contact(self.db, bruno, "email", "bruno.dias@email.com")
+        entry = _entry(
+            self.db,
+            bruno,
+            email,
+            "Pode confirmar.",
+            "2026-11-22T09:00:00",
+            "arquivada",
+        )
+        draft = self.db.execute(
+            """
+            INSERT INTO rascunho (entrada_id, texto, estado)
+            VALUES (?, 'Bruno, confirmo.', 'aprovado')
+            """,
+            (entry,),
+        ).lastrowid
+        self.db.commit()
+        config = CycleConfig(quantity=1, times=("07:15", "18:00"))
+
+        for moment in (datetime(2026, 11, 23, 8, 0), datetime(2026, 11, 23, 18, 0)):
+            closed = self.controller.run_cycle(moment, self._dispatch, config)
+            self.assertFalse(closed.ran)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
+        self.assertEqual(self._config()["quantidade"], 1)
+        self.assertEqual(self._config()["horarios"], ["07:15", "18:00"])
+
+        opened = self.controller.run_cycle(datetime(2026, 11, 23, 7, 15), self._dispatch, config)
+        self.assertTrue(opened.ran)
+        self.assertEqual(self.calls, [(draft, "email")])
+        self.assertEqual(set(opened.fila()), {"rascunho", "pendencia"})
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
+        self.assertEqual(self._config()["ultimo"], "2026-11-23T07:15:00")
+
+
+class WindowDoesNotRunTheCycleTest(unittest.TestCase):
+    def test_window_does_not_run_the_cycle(self) -> None:
+        qml = (package_dir() / "qml" / "Main.qml").read_text(encoding="utf-8").lower()
+        window = (package_dir() / "window.py").read_text(encoding="utf-8").lower()
+        for banned in ("run_cycle", "ciclo.json"):
+            self.assertNotIn(banned, qml)
+            self.assertNotIn(banned, window)

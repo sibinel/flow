@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QObject, Slot
 
 from flow.classify import Classifier, ReadTool
+from flow.cycle import DayCycle
 from flow.harness import Harness
 from flow.llm import CloudLLM
 from flow.mail import ImapReader
@@ -196,6 +197,13 @@ class Controller(QObject):
         hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
         self._reload()
         return hit.draft_id
+
+    def run_cycle(self, now, dispatch=None, config=None):
+        """Monta a fila no horário e envia o que já foi aprovado. Fora dele, não envia."""
+        queue = DayCycle(self._db, self._data_dir, config).run(now, dispatch)
+        if queue.ran:
+            self._reload()
+        return queue
 
     def close(self) -> None:
         self._db.close()
