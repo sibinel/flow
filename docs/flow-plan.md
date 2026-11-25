@@ -71,3 +71,5 @@ Updates e deletes do SQLite que mexem em mais de uma tabela precisam de uma tran
 O envio de e-mail hoje é só `text/plain`. Falta `text/html`.
 
 O envio não manda anexo. Falta anexar o documento da entrada.
+
+Melhora na busca de documentos. O fluxo não insere trechos no índice nem extrai texto dos documentos. A classificação associa processo quando o número ou o título inteiro aparece no texto.
