@@ -6,7 +6,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flow.classify import Classifier, ReadTool
@@ -85,15 +85,19 @@ class DayCycle:
         save_config(self._data_dir, self.config)
 
     def run(self, now: datetime, dispatch=None, collect=None) -> CycleQueue:
-        """No horário, coleta, monta a fila e envia o aprovado. Fora dele, não envia."""
-        slot = self._open_slot(now)
-        if slot is None or self._done(now, slot):
+        """A vaga fica aberta até a próxima e roda uma vez. A coleta tem transação própria."""
+        slot_at = self._open_slot(now)
+        if slot_at is None or self._done(slot_at):
             return CycleQueue((), (), False, ())
-        try:
-            if collect is not None:
+        if collect is not None:
+            try:
                 collect()
-            sent = self._execute(now, dispatch)
-            drafts, pendings = self._queue(now)
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+        try:
+            sent = self._execute(slot_at, dispatch)
+            drafts, pendings = self._queue(slot_at)
             self._db.commit()
         except Exception:
             self._db.rollback()
@@ -101,21 +105,31 @@ class DayCycle:
         save_config(
             self._data_dir,
             self.config,
-            _at(now, slot).isoformat(timespec="seconds"),
+            slot_at.isoformat(timespec="seconds"),
         )
         return CycleQueue(drafts, pendings, True, tuple(sent))
 
-    def _open_slot(self, now: datetime) -> str | None:
-        stamp = now.strftime("%H:%M")
-        if stamp not in self.config.slots():
+    def _open_slot(self, now: datetime) -> datetime | None:
+        """A vaga que já começou e ainda não chegou na seguinte."""
+        slots = self.config.slots()
+        if not slots:
             return None
-        return stamp
+        clock = now.strftime("%H:%M")
+        started = [item for item in slots if item <= clock]
+        if started:
+            return _at(now, started[-1])
+        previous = now - timedelta(days=1)
+        return _at(previous, slots[-1])
 
-    def _done(self, now: datetime, slot: str) -> bool:
+    def _done(self, slot_at: datetime) -> bool:
         ultimo = self._ultimo()
         if ultimo is None:
             return False
-        return ultimo >= _at(now, slot)
+        if ultimo.tzinfo is None and slot_at.tzinfo is not None:
+            ultimo = ultimo.replace(tzinfo=slot_at.tzinfo)
+        elif slot_at.tzinfo is None and ultimo.tzinfo is not None:
+            slot_at = slot_at.replace(tzinfo=ultimo.tzinfo)
+        return ultimo >= slot_at
 
     def _ultimo(self) -> datetime | None:
         path = config_path(self._data_dir)

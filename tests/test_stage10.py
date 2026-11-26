@@ -98,9 +98,9 @@ class DayCycleTest(unittest.TestCase):
         later = _entry(self.db, None, phone, later_text, "2026-11-23T09:30:00", "nova")
         self.db.commit()
 
-        afternoon = datetime(2026, 11, 23, 15, 0)
-        held = self.controller.run_cycle(afternoon, self._dispatch)
-        self.assertFalse(held.ran)
+        early = datetime(2026, 11, 23, 7, 0)
+        held = self.controller.run_cycle(early, self._dispatch)
+        self.assertTrue(held.ran)
         self.assertEqual(self.calls, [])
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
         self.assertEqual(
@@ -110,7 +110,7 @@ class DayCycleTest(unittest.TestCase):
         saved = self._config()
         self.assertEqual(saved["quantidade"], 1)
         self.assertEqual(saved["horarios"], ["08:00"])
-        self.assertNotIn("ultimo", saved)
+        self.assertEqual(saved["ultimo"], "2026-11-22T08:00:00")
 
         morning = datetime(2026, 11, 23, 8, 0)
         result = self.controller.run_cycle(morning, self._dispatch)
@@ -252,20 +252,22 @@ class DayCycleTest(unittest.TestCase):
         self.db.commit()
         config = CycleConfig(quantity=1, times=("07:15", "18:00"))
 
-        for moment in (datetime(2026, 11, 23, 8, 0), datetime(2026, 11, 23, 18, 0)):
-            closed = self.controller.run_cycle(moment, self._dispatch, config)
-            self.assertFalse(closed.ran)
+        early = self.controller.run_cycle(datetime(2026, 11, 23, 7, 0), self._dispatch, config)
+        self.assertTrue(early.ran)
         self.assertEqual(self.calls, [])
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
-        self.assertEqual(self._config()["quantidade"], 1)
-        self.assertEqual(self._config()["horarios"], ["07:15", "18:00"])
 
-        opened = self.controller.run_cycle(datetime(2026, 11, 23, 7, 15), self._dispatch, config)
+        opened = self.controller.run_cycle(datetime(2026, 11, 23, 8, 0), self._dispatch, config)
         self.assertTrue(opened.ran)
         self.assertEqual(self.calls, [(draft, "email")])
         self.assertEqual(set(opened.fila()), {"rascunho", "pendencia"})
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
+        self.assertEqual(self._config()["quantidade"], 1)
+        self.assertEqual(self._config()["horarios"], ["07:15", "18:00"])
         self.assertEqual(self._config()["ultimo"], "2026-11-23T07:15:00")
+
+        again = self.controller.run_cycle(datetime(2026, 11, 23, 18, 0), self._dispatch, config)
+        self.assertFalse(again.ran)
 
     def test_false_does_not_record_and_an_existing_envio_is_not_repeated(self) -> None:
         bruno = _client(self.db, "Bruno Dias")

@@ -23,6 +23,7 @@ _STOPPED = "Leitura e envio de WhatsApp estão parados."
 
 
 class Controller(QObject):
+    backgroundDone = Signal()
     surfaceChanged = Signal()
 
     def __init__(self, data_root: Path | None = None) -> None:
@@ -34,6 +35,8 @@ class Controller(QObject):
         self._clock: QTimer | None = None
         self._qr_clock: QTimer | None = None
         self._pairing = False
+        self._cycle_thread: threading.Thread | None = None
+        self.backgroundDone.connect(self._reload)
         if data_root is None:
             ensure_demo(self._db)
         self._drafts = RecordModel(["draftId", "text", "address", "channel", "state"])
@@ -55,7 +58,7 @@ class Controller(QObject):
             return
         self._clock = QTimer(self)
         self._clock.setInterval(15000)
-        self._clock.timeout.connect(self._tick)
+        self._clock.timeout.connect(self._start_background_cycle)
         self._clock.start()
         self._qr_clock = QTimer(self)
         self._qr_clock.setInterval(400)
@@ -66,27 +69,51 @@ class Controller(QObject):
         moment = datetime.now().astimezone() if now is None else now
         return self.run_cycle(moment, self._dispatch_approved)
 
-    def _collect(self) -> None:
+    def _start_background_cycle(self) -> None:
+        """O relógio da janela não espera a rede."""
+        if self._cycle_thread is not None and self._cycle_thread.is_alive():
+            return
+        self._cycle_thread = threading.Thread(target=self._run_background_cycle, daemon=True)
+        self._cycle_thread.start()
+
+    def _run_background_cycle(self) -> None:
+        db = open_database(self._data_dir)
+        try:
+            try:
+                DayCycle(db, self._data_dir).run(
+                    datetime.now().astimezone(),
+                    lambda draft_id, channel: self._dispatch_approved(draft_id, channel, db),
+                    lambda: self._collect(db),
+                )
+            except Exception:
+                db.rollback()
+        finally:
+            db.close()
+            self.backgroundDone.emit()
+
+    def _collect(self, connection=None) -> None:
         """Coleta antes da fila. Sem conta ou sem sessão, esse lado não corre."""
+        db = self._db if connection is None else connection
         account = load_mail_account(self._data_dir)
         if account is not None:
-            ImapReader(self._db, self._data_dir).ingest(
+            ImapReader(db, self._data_dir).ingest(
                 account.imap_host,
                 account.imap_port,
                 account.user,
                 account.password,
             )
         if session_ready(whatsapp_session(self._data_dir)):
-            WhatsAppReader(self._db, self._data_dir).ingest()
+            WhatsAppReader(db, self._data_dir).ingest()
 
-    def _dispatch_approved(self, draft_id: int, channel: str) -> bool:
+    def _dispatch_approved(self, draft_id: int, channel: str, connection=None) -> bool:
+        db = self._db if connection is None else connection
         if channel == "email":
             account = load_mail_account(self._data_dir)
             target = load_smtp_target(self._data_dir)
             if account is None or target is None:
                 return False
             host, port = target
-            return SmtpSender(self._db).send(
+            return SmtpSender(db).send(
                 draft_id,
                 host,
                 port,
@@ -96,7 +123,7 @@ class Controller(QObject):
         if channel == "whatsapp":
             if not session_ready(whatsapp_session(self._data_dir)):
                 return False
-            return WhatsAppSender(self._db, self._data_dir).send(draft_id)
+            return WhatsAppSender(db, self._data_dir).send(draft_id)
         return False
 
     def _watch_qr(self) -> None:
@@ -307,9 +334,23 @@ class Controller(QObject):
     @Slot(str, result=int)
     def search(self, phrase: str, transport=None) -> int:
         """Busca trechos do cliente citado e grava o rascunho. Não envia."""
-        hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
-        self._reload()
-        return hit.draft_id
+        if transport is not None:
+            hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
+            self._reload()
+            return hit.draft_id
+        threading.Thread(target=self._search_away, args=(phrase,), daemon=True).start()
+        return 0
+
+    def _search_away(self, phrase: str) -> None:
+        db = open_database(self._data_dir)
+        try:
+            try:
+                Harness(db, CloudLLM(db)).search(phrase)
+            except Exception:
+                db.rollback()
+        finally:
+            db.close()
+            self.backgroundDone.emit()
 
     def run_cycle(self, now, dispatch=None, config=None):
         """Monta a fila no horário e envia o que já foi aprovado. Fora dele, não envia."""
