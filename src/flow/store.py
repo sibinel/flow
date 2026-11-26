@@ -38,10 +38,6 @@ CREATE TABLE IF NOT EXISTS entrada (
     mensagem_id TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS entrada_mensagem_id
-ON entrada(mensagem_id)
-WHERE mensagem_id IS NOT NULL AND mensagem_id != '';
-
 CREATE TABLE IF NOT EXISTS documento (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
@@ -181,6 +177,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute("DROP TABLE pendencia")
         connection.execute("ALTER TABLE pendencia_migrada RENAME TO pendencia")
         connection.execute("PRAGMA foreign_keys = ON")
+    connection.commit()
 
 
 _DEMO_CLIENTS = (
