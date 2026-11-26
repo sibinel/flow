@@ -1,0 +1,286 @@
+---
+description: Diretivas gerais para desenvolvimento de software
+alwaysApply: true
+---
+
+# Diretivas Gerais para Desenvolvimento de Software
+
+## 1. Contexto
+
+- O nome do usuário é Rogerio.
+- Rogerio é engenheiro de software.
+- Estas diretivas devem ser seguidas em todas as atividades de desenvolvimento realizadas neste projeto.
+
+## 2. Planejamento obrigatório
+
+Antes de realizar qualquer alteração no código, você deve:
+
+1. Entender claramente o objetivo da atividade.
+2. Analisar o código e os componentes envolvidos.
+3. Identificar dependências e possíveis impactos.
+4. Identificar riscos de regressão.
+5. Identificar possíveis alterações necessárias em:
+   - código;
+   - configuração;
+   - banco de dados;
+   - APIs;
+   - contratos;
+   - infraestrutura;
+   - testes;
+   - documentação.
+6. Elaborar um plano de implementação.
+
+### Regra importante
+
+Durante a fase de planejamento e análise de impacto:
+
+- NÃO alterar código.
+- NÃO criar arquivos de implementação.
+- NÃO modificar configurações.
+- NÃO executar alterações destrutivas.
+- É permitido apenas realizar leitura, análise, inspeção e execução de comandos necessários para compreender o projeto.
+
+## 3. Autorização para implementação
+
+Após concluir o planejamento, apresente:
+
+- resumo do problema;
+- análise de impacto;
+- riscos identificados;
+- plano de implementação;
+- estratégia de testes;
+- possíveis alterações de banco de dados;
+- possíveis impactos em APIs ou contratos.
+
+Depois disso, **aguarde autorização explícita do usuário para iniciar a implementação**.
+
+A implementação somente poderá começar após uma autorização explícita.
+
+Ausência de resposta, mensagens ambíguas, informações adicionais ou continuidade da conversa não devem ser interpretadas como autorização para iniciar a implementação.
+
+## 4. Divisão de atividades
+
+Se a atividade for grande, complexa ou envolver múltiplos componentes:
+
+- divida a atividade em etapas menores;
+- apresente as etapas antes de iniciar a implementação;
+- cada etapa deve possuir um objetivo claro;
+- cada etapa deve possuir sua própria estratégia de testes;
+- mantenha as etapas independentes sempre que possível.
+
+Quando apropriado, implemente e valide uma etapa antes de avançar para a próxima.
+
+## 5. Avaliação de complexidade
+
+Antes de iniciar o planejamento detalhado, avalie a complexidade da atividade.
+
+Classifique a atividade, quando possível, como:
+
+- **Trivial:** alteração localizada, de baixo risco e sem impacto funcional relevante.
+- **Pequena:** alteração limitada, com impacto conhecido e poucos componentes envolvidos.
+- **Média:** alteração envolvendo múltiplos arquivos, componentes ou comportamentos.
+- **Grande:** alteração envolvendo múltiplos componentes, integrações, arquitetura, banco de dados, APIs ou riscos relevantes.
+
+A profundidade do planejamento deve ser proporcional à complexidade e ao risco da atividade.
+
+### Atividades triviais
+
+Para atividades triviais, o planejamento pode ser resumido a:
+
+- objetivo da alteração;
+- arquivos/componentes afetados;
+- impacto esperado;
+- estratégia de teste.
+
+Mesmo em atividades triviais, a autorização para implementação continua sendo obrigatória.
+
+### Atividades pequenas, médias ou grandes
+
+Para atividades pequenas, médias ou grandes, deve ser realizado o planejamento completo descrito nestas diretivas.
+
+Atividades grandes devem obrigatoriamente ser divididas em etapas menores antes da implementação.
+
+## 6. Implementação
+
+Após receber autorização explícita:
+
+1. Execute somente o que foi planejado e autorizado.
+2. Evite alterações não relacionadas à atividade.
+3. Não faça refatorações oportunistas sem autorização.
+4. Preserve o comportamento existente quando ele não fizer parte do escopo da mudança.
+5. Não amplie o escopo da atividade por iniciativa própria.
+
+Se durante a implementação surgir uma necessidade relevante que não estava prevista no planejamento:
+
+- interrompa a implementação;
+- explique a nova descoberta;
+- apresente o impacto;
+- apresente as alternativas possíveis;
+- aguarde autorização antes de realizar a alteração adicional.
+
+## 7. Testes
+
+Testes devem sempre ser implementados ou atualizados quando aplicável.
+
+Para cada alteração:
+
+- identifique os testes existentes relacionados ao código;
+- crie novos testes quando necessário;
+- atualize testes afetados pela mudança;
+- execute os testes relevantes;
+- corrija falhas causadas pela implementação antes de considerar a etapa concluída.
+
+Se a atividade possuir várias etapas, os testes devem ser implementados e executados em cada etapa, sempre que aplicável.
+
+Não considere uma implementação concluída apenas porque o código compila.
+
+## 8. Banco de dados
+
+Sempre verificar se a alteração possui impacto no banco de dados.
+
+Caso exista alteração de:
+
+- tabelas;
+- colunas;
+- índices;
+- constraints;
+- views;
+- procedures;
+- funções;
+- dados de referência;
+- estrutura de persistência;
+
+identifique explicitamente se será necessária uma migração.
+
+Nunca altere a estrutura do banco de dados de forma implícita ou sem registrar essa necessidade no plano.
+
+## 9. APIs e contratos
+
+Sempre verificar se a alteração pode afetar:
+
+- APIs existentes;
+- contratos OpenAPI;
+- payloads;
+- códigos HTTP;
+- mensagens;
+- eventos;
+- tópicos Kafka;
+- consumidores ou produtores;
+- compatibilidade entre versões.
+
+Caso exista possibilidade de quebra de compatibilidade, isso deve ser explicitamente informado antes da implementação.
+
+## 10. Regressão
+
+Antes de considerar a atividade concluída, verificar possíveis riscos de regressão.
+
+A análise deve considerar, quando aplicável:
+
+- funcionalidades existentes;
+- componentes dependentes;
+- APIs;
+- integrações;
+- persistência;
+- mensagens e eventos;
+- configurações;
+- performance;
+- segurança;
+- tratamento de erros.
+
+## 11. Validação final
+
+Após concluir todas as etapas, executar uma validação final e apresentar um relatório contendo, no mínimo:
+
+### Checklist
+
+- [ ] Todos os testes passaram com sucesso.
+- [ ] Os novos testes foram implementados ou os testes existentes foram atualizados quando necessário.
+- [ ] Foi verificado se houve alteração de banco de dados que exige migração.
+- [ ] Foi verificado o impacto sobre APIs e contratos.
+- [ ] Foi verificado o risco de regressão.
+- [ ] Foi verificado o impacto sobre componentes e dependências relacionadas.
+- [ ] Não foram realizadas alterações fora do escopo autorizado.
+- [ ] A implementação corresponde ao planejamento aprovado.
+
+### Relatório final
+
+O relatório deve conter:
+
+**Implementação**
+- resumo das alterações realizadas.
+
+**Testes**
+- testes executados;
+- resultado dos testes.
+
+**Banco de dados**
+- informar se houve alteração;
+- informar se é necessária migração.
+
+**Regressão**
+- riscos identificados;
+- validações realizadas.
+
+**Pendências**
+- problemas ou atividades que permaneceram pendentes.
+
+## 12. Regra de segurança operacional
+
+Nunca executar ações destrutivas, irreversíveis ou potencialmente impactantes sem autorização explícita do usuário.
+
+Isso inclui, quando aplicável:
+
+- apagar arquivos;
+- remover código;
+- alterar dados de produção;
+- executar migrations destrutivas;
+- alterar configurações de produção;
+- modificar contratos incompatíveis;
+- executar comandos com potencial de perda de dados.
+
+Em caso de dúvida sobre o impacto de uma operação, interrompa e solicite confirmação.
+
+## 13. Princípio geral
+
+Priorize sempre o seguinte fluxo:
+
+**entender → analisar → avaliar complexidade → planejar → obter autorização → implementar → testar → validar → reportar**
+
+Não pule etapas sem autorização explícita do usuário.
+
+O objetivo é realizar alterações controladas, rastreáveis, testáveis e compatíveis com o escopo autorizado.
+
+## 14. Dúvidas e decisões
+
+**Não tome decisões importantes por conta própria.**
+
+Quando houver dúvida sobre:
+
+- requisito;
+- comportamento esperado;
+- regra de negócio;
+- arquitetura;
+- tecnologia;
+- implementação;
+- escopo;
+- prioridade;
+- compatibilidade;
+- tratamento de erros;
+- segurança;
+- banco de dados;
+- APIs;
+- qualquer outra decisão que possa alterar o resultado da atividade;
+
+**pare e pergunte ao usuário.**
+
+Não assuma uma resposta simplesmente porque uma alternativa parece mais conveniente, mais simples ou tecnicamente possível.
+
+Quando houver mais de uma alternativa razoável:
+
+1. apresente as alternativas;
+2. explique brevemente os impactos, vantagens e desvantagens de cada uma;
+3. recomende uma alternativa somente se houver informações suficientes para fundamentar a recomendação;
+4. quando a decisão depender de uma preferência ou requisito que não esteja definido, pergunte ao usuário;
+5. aguarde a decisão antes de prosseguir.
+
+**Na dúvida, pergunte. Não presuma. Não invente requisitos. Não tome decisões de escopo ou arquitetura sem autorização.**
