@@ -14,7 +14,7 @@ from flow.harness import Harness
 from flow.llm import CloudLLM
 from flow.mail import ImapReader, load_mail_account
 from flow.paths import ensure_user_data, whatsapp_session
-from flow.send import SmtpSender
+from flow.send import SmtpSender, load_smtp_target
 from flow.whatsapp import WhatsAppReader, WhatsAppSender, pair, session_ready
 from flow.queue import RecordModel
 from flow.store import database_file, ensure_demo, open_database
@@ -71,8 +71,8 @@ class Controller(QObject):
         account = load_mail_account(self._data_dir)
         if account is not None:
             ImapReader(self._db, self._data_dir).ingest(
-                account.host,
-                account.port,
+                account.imap_host,
+                account.imap_port,
                 account.user,
                 account.password,
             )
@@ -82,12 +82,14 @@ class Controller(QObject):
     def _dispatch_approved(self, draft_id: int, channel: str) -> bool:
         if channel == "email":
             account = load_mail_account(self._data_dir)
-            if account is None:
+            target = load_smtp_target(self._data_dir)
+            if account is None or target is None:
                 return False
+            host, port = target
             return SmtpSender(self._db).send(
                 draft_id,
-                account.host,
-                account.port,
+                host,
+                port,
                 account.user,
                 account.password,
             )

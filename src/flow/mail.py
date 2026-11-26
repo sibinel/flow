@@ -6,6 +6,7 @@ import hashlib
 import imaplib
 import json
 import sqlite3
+import ssl
 from dataclasses import dataclass
 from email import message_from_bytes
 from email import policy
@@ -75,11 +76,19 @@ def _fetch(host: str, port: int, user: str, password: str) -> list[bytes]:
         return messages
 
 
+def verified_context() -> ssl.SSLContext:
+    """Fora do loopback o certificado e o nome do servidor são conferidos."""
+    context = ssl.create_default_context()
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.check_hostname = True
+    return context
+
+
 def _imap(host: str, port: int):
     """Em loopback o teste fala IMAP em claro. Fora dele a conexão já nasce cifrada."""
     if host == "127.0.0.1":
         return imaplib.IMAP4(host, port)
-    return imaplib.IMAP4_SSL(host, port)
+    return imaplib.IMAP4_SSL(host, port, ssl_context=verified_context())
 
 
 def _parts(message) -> tuple[str, list[tuple[str, bytes]]]:
@@ -102,14 +111,37 @@ def _parts(message) -> tuple[str, list[tuple[str, bytes]]]:
 
 @dataclass(frozen=True)
 class MailAccount:
-    host: str
-    port: int
+    imap_host: str
+    imap_port: int
     user: str
     password: str
 
 
 def load_mail_account(data_dir: Path) -> MailAccount | None:
-    """Conta de e-mail no disco. Sem o arquivo, a coleta não corre."""
+    """Conta de coleta no disco. Sem o arquivo, a coleta não corre.
+
+    O arquivo antigo, com um host e uma porta, chega até aqui.
+    Os campos de envio ficam no remetente.
+    """
+    data = _read_mail_file(data_dir)
+    if data is None:
+        return None
+    user = str(data.get("user") or "").strip()
+    password = data.get("password")
+    imap_host = _field(data, "imap_host", "host")
+    imap_port = _number(data, "imap_port", "port")
+    if (
+        not imap_host
+        or imap_port is None
+        or not user
+        or not isinstance(password, str)
+        or password == ""
+    ):
+        return None
+    return MailAccount(imap_host, imap_port, user, password)
+
+
+def _read_mail_file(data_dir: Path) -> dict | None:
     path = Path(data_dir) / "email.json"
     if not path.is_file():
         return None
@@ -119,13 +151,27 @@ def load_mail_account(data_dir: Path) -> MailAccount | None:
         return None
     if not isinstance(data, dict):
         return None
-    host = str(data.get("host") or "").strip()
-    user = str(data.get("user") or "").strip()
-    password = data.get("password")
-    try:
-        port = int(data["port"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    if not host or not user or not isinstance(password, str) or password == "" or port <= 0:
-        return None
-    return MailAccount(host, port, user, password)
+    return data
+
+
+def _field(data: dict, *keys: str) -> str:
+    for key in keys:
+        if key not in data:
+            continue
+        value = data[key]
+        if isinstance(value, str):
+            return value.strip()
+        return ""
+    return ""
+
+
+def _number(data: dict, *keys: str) -> int | None:
+    for key in keys:
+        if key not in data:
+            continue
+        try:
+            number = int(data[key])
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+    return None

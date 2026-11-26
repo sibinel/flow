@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import ssl
 import tempfile
 import threading
 import unittest
@@ -156,8 +157,8 @@ class ImapReaderTest(unittest.TestCase):
         trace: list[tuple] = []
 
         class SecureImap:
-            def __init__(self, host: str, port: int) -> None:
-                trace.append(("connect", host, port))
+            def __init__(self, host: str, port: int, *, ssl_context=None, timeout=None) -> None:
+                trace.append(("connect", host, port, ssl_context))
 
             def __enter__(self):
                 return self
@@ -182,8 +183,11 @@ class ImapReaderTest(unittest.TestCase):
             entry_ids = self.controller.ingest_mail("imap.example", 1993, "ana", "segredo")
 
         self.assertEqual(entry_ids, [])
+        context = trace[0][3]
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
         self.assertEqual(
-            trace,
+            [(item[0], item[1], item[2]) if item[0] == "connect" else item for item in trace],
             [
                 ("connect", "imap.example", 1993),
                 ("login", "ana", "segredo"),

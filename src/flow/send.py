@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import smtplib
 from email.message import EmailMessage
+from pathlib import Path
+
+from flow.mail import _number, _read_mail_file, verified_context
 
 
 class SendTool:
@@ -84,8 +88,20 @@ def _already_sent(connection: sqlite3.Connection, draft_id: int) -> bool:
     return found is not None
 
 
+def load_smtp_target(data_dir: Path) -> tuple[str, int] | None:
+    """Host e porta de envio. Sem esses campos, o correio não sai."""
+    data = _read_mail_file(data_dir)
+    if data is None:
+        return None
+    host = data.get("smtp_host")
+    port = _number(data, "smtp_port")
+    if not isinstance(host, str) or not host.strip() or port is None:
+        return None
+    return host.strip(), port
+
+
 def _smtp(host: str, port: int):
     """Em loopback o teste fala SMTP em claro. Fora dele a conexão já nasce cifrada."""
     if host == "127.0.0.1":
         return smtplib.SMTP(host, port, timeout=5)
-    return smtplib.SMTP_SSL(host, port, timeout=5)
+    return smtplib.SMTP_SSL(host, port, timeout=5, context=verified_context())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import ssl
 import tempfile
 import threading
 import unittest
@@ -173,8 +174,17 @@ class SmtpSenderTest(unittest.TestCase):
         trace: list[tuple] = []
 
         class SecureSmtp:
-            def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
-                trace.append(("connect", host, port))
+            def __init__(
+                self,
+                host: str,
+                port: int,
+                local_hostname: str | None = None,
+                *,
+                timeout: float | None = None,
+                source_address=None,
+                context=None,
+            ) -> None:
+                trace.append(("connect", host, port, context))
 
             def __enter__(self):
                 return self
@@ -198,8 +208,11 @@ class SmtpSenderTest(unittest.TestCase):
                 )
             )
 
+        context = trace[0][3]
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
         self.assertEqual(
-            trace,
+            [(item[0], item[1], item[2]) if item[0] == "connect" else item for item in trace],
             [
                 ("connect", "smtp.example", 2525),
                 ("login", "escritorio@flow.local", "segredo"),
