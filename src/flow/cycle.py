@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from flow.classify import Classifier, ReadTool
+from flow.when import parse_received
 
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -126,6 +127,7 @@ class DayCycle:
         return datetime.fromisoformat(raw)
 
     def _execute(self, now: datetime, dispatch) -> list[int]:
+        self._hold_unreadable()
         archived: list[int] = []
         for entry_id in self._due(now):
             if Classifier(ReadTool(self._db)).classify(entry_id) == "arquivada":
@@ -133,6 +135,28 @@ class DayCycle:
         for entry_id in archived:
             self._followup(entry_id)
         return self._send_approved(now, dispatch)
+
+    def _hold_unreadable(self) -> None:
+        """Data que não dá para ler vira pendência e fica fora da vaga."""
+        rows = self._db.execute(
+            "SELECT id, recebido_em FROM entrada WHERE estado = 'nova' ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            if parse_received(row["recebido_em"]) is not None:
+                continue
+            self._db.execute(
+                "UPDATE entrada SET estado = 'pendente' WHERE id = ?",
+                (row["id"],),
+            )
+            found = self._db.execute(
+                "SELECT 1 FROM pendencia WHERE entrada_id = ? AND motivo = 'data ilegível'",
+                (row["id"],),
+            ).fetchone()
+            if found is None:
+                self._db.execute(
+                    "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, 'data ilegível')",
+                    (row["id"],),
+                )
 
     def _due(self, now: datetime) -> list[int]:
         due: list[int] = []
@@ -246,15 +270,9 @@ def _at(now: datetime, slot: str) -> datetime:
 
 
 def _at_or_before(value: str, now: datetime) -> bool:
-    text = (value or "").strip()
-    if not text:
-        return True
-    try:
-        stamp = datetime.fromisoformat(text)
-    except ValueError:
-        return True
-    if stamp.tzinfo is not None and now.tzinfo is None:
-        stamp = stamp.replace(tzinfo=None)
-    elif stamp.tzinfo is None and now.tzinfo is not None:
-        now = now.replace(tzinfo=None)
-    return stamp <= now
+    stamp = parse_received(value)
+    if stamp is None:
+        return False
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=stamp.tzinfo)
+    return stamp <= now.astimezone(stamp.tzinfo)

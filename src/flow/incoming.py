@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from flow.when import stored_received
+
 
 def already_stored(connection: sqlite3.Connection, message_id: str) -> bool:
     if not message_id:
@@ -65,6 +67,9 @@ def open_entry(
         reason = "contato novo"
     elif not has_text and not has_file:
         reason = "mídia não baixada"
+    received = stored_received(received_at)
+    if received is None and reason is None:
+        reason = "data ilegível"
     body = text.strip()
     if not body:
         body = reason or ""
@@ -76,7 +81,7 @@ def open_entry(
         """,
         (
             contact_id,
-            received_at,
+            received if received is not None else (received_at or ""),
             body,
             "pendente" if reason else "nova",
             message_id or None,

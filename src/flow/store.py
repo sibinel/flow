@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS pendencia (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
     motivo TEXT NOT NULL CHECK (motivo IN (
-        'nome diferente', 'contato novo', 'processo não citado', 'mídia não baixada'
+        'nome diferente', 'contato novo', 'processo não citado',
+        'mídia não baixada', 'data ilegível'
     ))
 );
 
@@ -154,7 +155,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
     pendencia = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pendencia'"
     ).fetchone()
-    if pendencia is not None and "mídia não baixada" not in pendencia["sql"]:
+    if pendencia is not None and "data ilegível" not in pendencia["sql"]:
         connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute(
             """
@@ -163,7 +164,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 entrada_id INTEGER NOT NULL REFERENCES entrada(id),
                 motivo TEXT NOT NULL CHECK (motivo IN (
                     'nome diferente', 'contato novo', 'processo não citado',
-                    'mídia não baixada'
+                    'mídia não baixada', 'data ilegível'
                 ))
             )
             """
