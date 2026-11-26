@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from flow.incoming import keep_each, open_entry
+from flow.incoming import keep_each, open_entry, scoped_message_id
 from flow.paths import document_target, package_dir, whatsapp_session
 from flow.send import SendTool
 
@@ -75,11 +75,16 @@ class WhatsAppReader:
             self._db,
             kind="whatsapp",
             value=str(message.get("from") or ""),
-            message_id=str(message.get("id") or "").strip(),
+            message_id=scoped_message_id(
+                "whatsapp",
+                str(message.get("from") or ""),
+                str(message.get("id") or ""),
+            ),
             received_at=str(message.get("received_at") or ""),
             text=text,
             has_text=bool(original),
             has_file=bool(attachments),
+            account="whatsapp",
         )
         if entry_id is None:
             return None

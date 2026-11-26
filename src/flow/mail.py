@@ -29,6 +29,7 @@ class ImapReader:
     def ingest(self, host: str, port: int, user: str, password: str) -> list[int]:
         """Lê a caixa e grava entrada e documento. Não envia."""
         self._docs.mkdir(parents=True, exist_ok=True)
+        self._account = user
         return keep_each(self._db, _fetch(host, port, user, password), self._save)
 
     def _save(self, raw: bytes) -> int | None:
@@ -47,6 +48,7 @@ class ImapReader:
             text=body,
             has_text=bool(body.strip()),
             has_file=bool(attachments),
+            account=self._account,
         )
         if entry_id is None:
             return None

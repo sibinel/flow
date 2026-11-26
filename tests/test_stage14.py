@@ -57,6 +57,7 @@ class ReceivedTimeTest(unittest.TestCase):
             text="Bruno, isto é sete e meia em São Paulo.",
             has_text=True,
             has_file=False,
+            account="whatsapp",
         )
         broken = open_entry(
             self.db,
@@ -67,6 +68,7 @@ class ReceivedTimeTest(unittest.TestCase):
             text="Sem data legível.",
             has_text=True,
             has_file=False,
+            account="whatsapp",
         )
         leftover = self._nova("quarta-feira", "Data que o ciclo ainda vai segurar.")
         self.db.commit()

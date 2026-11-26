@@ -7,12 +7,36 @@ import sqlite3
 from flow.when import stored_received
 
 
-def already_stored(connection: sqlite3.Connection, message_id: str) -> bool:
+def scoped_message_id(kind: str, chat: str, message_id: str) -> str:
+    """No WhatsApp o id gravado inclui o chat. Nos outros canais, fica como chegou."""
+    raw = (message_id or "").strip()
+    if kind != "whatsapp" or not raw:
+        return raw
+    key = _digits(chat) or chat.strip()
+    if not key:
+        return raw
+    prefix = f"{key}:"
+    if raw.startswith(prefix):
+        return raw
+    return prefix + raw
+
+
+def already_stored(
+    connection: sqlite3.Connection,
+    canal: str,
+    conta: str,
+    message_id: str,
+    sender: str = "",
+) -> bool:
+    """O mesmo id em outra conta, ou em outro chat, não é a mesma mensagem."""
     if not message_id:
         return False
     found = connection.execute(
-        "SELECT 1 FROM entrada WHERE mensagem_id = ?",
-        (message_id,),
+        """
+        SELECT 1 FROM entrada
+        WHERE canal = ? AND mensagem_id = ? AND conta IN (?, ?)
+        """,
+        (canal, message_id, conta, sender or conta),
     ).fetchone()
     return found is not None
 
@@ -57,9 +81,11 @@ def open_entry(
     text: str,
     has_text: bool,
     has_file: bool,
+    account: str,
 ) -> int | None:
-    """Grava a entrada. Id já visto devolve None. Contato sem cliente fica pendente."""
-    if already_stored(connection, message_id):
+    """Grava a entrada. Id já visto nesta conta devolve None. Contato sem cliente fica pendente."""
+    stored_id = scoped_message_id(kind, value, message_id)
+    if already_stored(connection, kind, account, stored_id, value):
         return None
     contact_id, known = contact_for(connection, kind, value)
     reason = None
@@ -76,15 +102,18 @@ def open_entry(
     entry_id = connection.execute(
         """
         INSERT INTO entrada (
-            cliente_id, contato_id, processo_id, recebido_em, texto, estado, mensagem_id
-        ) VALUES (NULL, ?, NULL, ?, ?, ?, ?)
+            cliente_id, contato_id, processo_id, recebido_em, texto, estado,
+            mensagem_id, canal, conta
+        ) VALUES (NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
         """,
         (
             contact_id,
             received if received is not None else (received_at or ""),
             body,
             "pendente" if reason else "nova",
-            message_id or None,
+            stored_id or None,
+            kind,
+            account,
         ),
     ).lastrowid
     saved = int(entry_id)
