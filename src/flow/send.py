@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import smtplib
+from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -26,7 +27,7 @@ class SmtpSender:
         return (self._tool.name,)
 
     def send(self, draft_id: int, host: str, port: int, sender: str, password: str) -> bool:
-        """Entrega e diz se saiu. Não grava envio nem marca o rascunho."""
+        """Entrega o rascunho aprovado. Grava em curso antes de sair."""
         if _already_sent(self._db, draft_id):
             return False
         row = self._db.execute(
@@ -46,14 +47,65 @@ class SmtpSender:
         if not same_client(row["entrada_cliente"], row["contato_cliente"]):
             hold_draft(self._db, draft_id)
             return False
+        if not claim_draft(self._db, draft_id):
+            return False
         self._tool = SendTool()
-        _deliver(host, port, sender, row["valor"], row["texto"], password)
+        delivered = _deliver(host, port, sender, row["valor"], row["texto"], password)
+        if delivered is False:
+            self._tool = None
+            release_draft(self._db, draft_id)
+            return False
+        record_delivery(self._db, draft_id, "email")
         return True
+
+
+def claim_draft(connection: sqlite3.Connection, draft_id: int) -> bool:
+    """Marca em curso e grava antes da entrega. Se o processo cair, fica assim."""
+    changed = connection.execute(
+        """
+        UPDATE rascunho SET estado = 'em curso'
+        WHERE id = ? AND estado = 'aprovado'
+        """,
+        (draft_id,),
+    )
+    if changed.rowcount != 1:
+        return False
+    connection.commit()
+    return True
+
+
+def release_draft(connection: sqlite3.Connection, draft_id: int) -> None:
+    """A entrega devolveu falso. O próximo ciclo pode tentar de novo."""
+    connection.execute(
+        """
+        UPDATE rascunho SET estado = 'aprovado'
+        WHERE id = ? AND estado = 'em curso'
+        """,
+        (draft_id,),
+    )
+    connection.commit()
+
+
+def record_delivery(connection: sqlite3.Connection, draft_id: int, channel: str) -> None:
+    """Registra a saída e tira o rascunho da fila."""
+    sent_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    connection.execute(
+        """
+        INSERT INTO envio (rascunho_id, enviado_em, canal)
+        VALUES (?, ?, ?)
+        """,
+        (draft_id, sent_at, channel),
+    )
+    connection.execute(
+        "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
+        (draft_id,),
+    )
+    connection.commit()
 
 
 def _deliver(
     host: str, port: int, sender: str, recipient: str, body: str, password: str
-) -> None:
+) -> bool:
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
@@ -62,6 +114,7 @@ def _deliver(
         if host != "127.0.0.1":
             smtp.login(sender, password)
         smtp.send_message(message)
+    return True
 
 
 def same_client(entry_client: int | None, contact_client: int | None) -> bool:

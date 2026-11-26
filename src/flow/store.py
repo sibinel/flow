@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS rascunho (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
     texto TEXT NOT NULL,
-    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado'))
+    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado', 'em curso'))
 );
 
 CREATE TABLE IF NOT EXISTS envio (
@@ -223,6 +223,33 @@ def _migrate(connection: sqlite3.Connection) -> None:
         )
         connection.execute("DROP TABLE pendencia")
         connection.execute("ALTER TABLE pendencia_migrada RENAME TO pendencia")
+        connection.execute("PRAGMA foreign_keys = ON")
+    rascunho = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rascunho'"
+    ).fetchone()
+    if rascunho is not None and "em curso" not in rascunho["sql"]:
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            """
+            CREATE TABLE rascunho_migrado (
+                id INTEGER PRIMARY KEY,
+                entrada_id INTEGER NOT NULL REFERENCES entrada(id),
+                texto TEXT NOT NULL,
+                estado TEXT NOT NULL CHECK (
+                    estado IN ('aguardando', 'aprovado', 'enviado', 'em curso')
+                )
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO rascunho_migrado (id, entrada_id, texto, estado)
+            SELECT id, entrada_id, texto, estado FROM rascunho
+            """
+        )
+        connection.execute("DROP TABLE rascunho")
+        connection.execute("ALTER TABLE rascunho_migrado RENAME TO rascunho")
         connection.execute("PRAGMA foreign_keys = ON")
     connection.commit()
 

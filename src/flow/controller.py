@@ -36,7 +36,7 @@ class Controller(QObject):
         self._pairing = False
         if data_root is None:
             ensure_demo(self._db)
-        self._drafts = RecordModel(["draftId", "text", "address", "channel"])
+        self._drafts = RecordModel(["draftId", "text", "address", "channel", "state"])
         self._pendings = RecordModel(["entryId", "text", "reason"])
         self._clients = RecordModel(["clientId", "name"])
         self._processes = RecordModel(["processId", "label"])
@@ -232,13 +232,14 @@ class Controller(QObject):
     ) -> bool:
         """Envia só rascunho aprovado. Sem aprovação, a tool de envio não entra."""
         sender_tool = SmtpSender(self._db)
-        if not sender_tool.send(draft_id, host, port, sender, password):
-            self._db.commit()
+        try:
+            sent = sender_tool.send(draft_id, host, port, sender, password)
+        except Exception:
             self._reload()
-            return False
+            raise
         self._db.commit()
         self._reload()
-        return True
+        return sent
 
     def ingest_whatsapp(self, runner=None) -> list[int]:
         """Lê o WhatsApp. Sem sessão gravada, para até um QR novo. Não envia."""
@@ -250,13 +251,14 @@ class Controller(QObject):
     def send_approved_whatsapp(self, draft_id: int, runner=None) -> bool:
         """Envia só rascunho aprovado. Sem sessão, a tool de envio não entra."""
         sender = WhatsAppSender(self._db, self._data_dir, runner)
-        if not sender.send(draft_id):
-            self._db.commit()
+        try:
+            sent = sender.send(draft_id)
+        except Exception:
             self._reload()
-            return False
+            raise
         self._db.commit()
         self._reload()
-        return True
+        return sent
 
     @Slot()
     def pair_whatsapp(self, runner=None) -> None:
@@ -311,7 +313,11 @@ class Controller(QObject):
 
     def run_cycle(self, now, dispatch=None, config=None):
         """Monta a fila no horário e envia o que já foi aprovado. Fora dele, não envia."""
-        queue = DayCycle(self._db, self._data_dir, config).run(now, dispatch, self._collect)
+        try:
+            queue = DayCycle(self._db, self._data_dir, config).run(now, dispatch, self._collect)
+        except Exception:
+            self._reload()
+            raise
         if queue.ran:
             self._reload()
         return queue
@@ -340,14 +346,16 @@ class Controller(QObject):
                     "text": row["texto"],
                     "address": row["valor"],
                     "channel": row["tipo"],
+                    "state": row["estado"],
                 }
                 for row in self._db.execute(
                     """
-                    SELECT rascunho.id, rascunho.texto, contato.valor, contato.tipo
+                    SELECT rascunho.id, rascunho.texto, rascunho.estado,
+                           contato.valor, contato.tipo
                     FROM rascunho
                     JOIN entrada ON entrada.id = rascunho.entrada_id
                     JOIN contato ON contato.id = entrada.contato_id
-                    WHERE rascunho.estado = 'aguardando'
+                    WHERE rascunho.estado IN ('aguardando', 'em curso')
                     ORDER BY rascunho.id
                     """
                 )

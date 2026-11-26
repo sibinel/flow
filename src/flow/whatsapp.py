@@ -17,7 +17,14 @@ from pathlib import Path
 
 from flow.incoming import keep_each, open_entry, scoped_message_id
 from flow.paths import package_dir, store_document, whatsapp_session
-from flow.send import SendTool, hold_draft, same_client
+from flow.send import (
+    SendTool,
+    claim_draft,
+    hold_draft,
+    record_delivery,
+    release_draft,
+    same_client,
+)
 
 
 class SessionRequired(RuntimeError):
@@ -108,7 +115,7 @@ class WhatsAppSender:
         return (self._tool.name,)
 
     def send(self, draft_id: int) -> bool:
-        """Entrega e diz se saiu. Não grava envio nem marca o rascunho."""
+        """Entrega o rascunho aprovado. Grava em curso antes de sair."""
         if _already_sent(self._db, draft_id):
             return False
         row = self._db.execute(
@@ -129,8 +136,15 @@ class WhatsAppSender:
             hold_draft(self._db, draft_id)
             return False
         session = _require_session(self._data_dir)
+        if not claim_draft(self._db, draft_id):
+            return False
         self._tool = SendTool()
-        self._runner(session, "send", {"to": row["valor"], "text": row["texto"]})
+        outcome = self._runner(session, "send", {"to": row["valor"], "text": row["texto"]})
+        if outcome is False:
+            self._tool = None
+            release_draft(self._db, draft_id)
+            return False
+        record_delivery(self._db, draft_id, "whatsapp")
         return True
 
 

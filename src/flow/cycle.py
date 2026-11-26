@@ -211,20 +211,19 @@ class DayCycle:
                 continue
             if dispatch(draft_id, row["tipo"]) is not True:
                 continue
-            if _already_sent(self._db, draft_id):
-                continue
-            sent_at = _at(now, now.strftime("%H:%M")).isoformat(timespec="seconds")
-            self._db.execute(
-                """
-                INSERT INTO envio (rascunho_id, enviado_em, canal)
-                VALUES (?, ?, ?)
-                """,
-                (draft_id, sent_at, row["tipo"]),
-            )
-            self._db.execute(
-                "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
-                (draft_id,),
-            )
+            if not _already_sent(self._db, draft_id):
+                sent_at = _at(now, now.strftime("%H:%M")).isoformat(timespec="seconds")
+                self._db.execute(
+                    """
+                    INSERT INTO envio (rascunho_id, enviado_em, canal)
+                    VALUES (?, ?, ?)
+                    """,
+                    (draft_id, sent_at, row["tipo"]),
+                )
+                self._db.execute(
+                    "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
+                    (draft_id,),
+                )
             sent.append(draft_id)
         return sent
 

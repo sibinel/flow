@@ -136,9 +136,9 @@ class SmtpSenderTest(unittest.TestCase):
             "SELECT estado FROM rascunho WHERE id = ?",
             (draft,),
         ).fetchone()["estado"]
-        self.assertIsNone(saved)
-        self.assertEqual(state, "aprovado")
-        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
+        self.assertEqual(saved["canal"], "email")
+        self.assertEqual(state, "enviado")
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
         self.assertTrue(server.messages)
         self.assertIn(
             "Confirmo o recebimento?",
@@ -219,10 +219,10 @@ class SmtpSenderTest(unittest.TestCase):
                 ("data", "escritorio@flow.local", "ana.lima@email.com"),
             ],
         )
-        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
         self.assertEqual(
             self.db.execute("SELECT estado FROM rascunho WHERE id = ?", (draft,)).fetchone()["estado"],
-            "aprovado",
+            "enviado",
         )
 
     def test_cycle_and_sender_record_one_row(self) -> None:
