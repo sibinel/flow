@@ -17,7 +17,7 @@ from pathlib import Path
 
 from flow.incoming import keep_each, open_entry, scoped_message_id
 from flow.paths import package_dir, store_document, whatsapp_session
-from flow.send import SendTool
+from flow.send import SendTool, hold_draft, same_client
 
 
 class SessionRequired(RuntimeError):
@@ -113,7 +113,9 @@ class WhatsAppSender:
             return False
         row = self._db.execute(
             """
-            SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor
+            SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor,
+                   entrada.cliente_id AS entrada_cliente,
+                   contato.cliente_id AS contato_cliente
             FROM rascunho
             JOIN entrada ON entrada.id = rascunho.entrada_id
             JOIN contato ON contato.id = entrada.contato_id
@@ -122,6 +124,9 @@ class WhatsAppSender:
             (draft_id,),
         ).fetchone()
         if row is None or row["estado"] != "aprovado" or row["tipo"] != "whatsapp":
+            return False
+        if not same_client(row["entrada_cliente"], row["contato_cliente"]):
+            hold_draft(self._db, draft_id)
             return False
         session = _require_session(self._data_dir)
         self._tool = SendTool()

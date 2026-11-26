@@ -231,6 +231,8 @@ class Controller(QObject):
         """Envia só rascunho aprovado. Sem aprovação, a tool de envio não entra."""
         sender_tool = SmtpSender(self._db)
         if not sender_tool.send(draft_id, host, port, sender, password):
+            self._db.commit()
+            self._reload()
             return False
         self._db.commit()
         self._reload()
@@ -247,6 +249,8 @@ class Controller(QObject):
         """Envia só rascunho aprovado. Sem sessão, a tool de envio não entra."""
         sender = WhatsAppSender(self._db, self._data_dir, runner)
         if not sender.send(draft_id):
+            self._db.commit()
+            self._reload()
             return False
         self._db.commit()
         self._reload()

@@ -27,7 +27,9 @@ class SmtpSender:
             return False
         row = self._db.execute(
             """
-            SELECT rascunho.texto, rascunho.estado, contato.valor
+            SELECT rascunho.texto, rascunho.estado, contato.valor,
+                   entrada.cliente_id AS entrada_cliente,
+                   contato.cliente_id AS contato_cliente
             FROM rascunho
             JOIN entrada ON entrada.id = rascunho.entrada_id
             JOIN contato ON contato.id = entrada.contato_id
@@ -36,6 +38,9 @@ class SmtpSender:
             (draft_id,),
         ).fetchone()
         if row is None or row["estado"] != "aprovado":
+            return False
+        if not same_client(row["entrada_cliente"], row["contato_cliente"]):
+            hold_draft(self._db, draft_id)
             return False
         self._tool = SendTool()
         _deliver(host, port, sender, row["valor"], row["texto"], password)
@@ -53,6 +58,22 @@ def _deliver(
         if host != "127.0.0.1":
             smtp.login(sender, password)
         smtp.send_message(message)
+
+
+def same_client(entry_client: int | None, contact_client: int | None) -> bool:
+    """O envio só sai se o contato pertence ao cliente da entrada."""
+    return entry_client is not None and entry_client == contact_client
+
+
+def hold_draft(connection: sqlite3.Connection, draft_id: int) -> None:
+    """Devolve o rascunho para a fila. Nada foi entregue."""
+    connection.execute(
+        """
+        UPDATE rascunho SET estado = 'aguardando'
+        WHERE id = ? AND estado = 'aprovado'
+        """,
+        (draft_id,),
+    )
 
 
 def _already_sent(connection: sqlite3.Connection, draft_id: int) -> bool:
