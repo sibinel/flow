@@ -63,6 +63,32 @@ def document_target(docs: Path, filename: str, entry_id: int, index: int) -> Pat
     return candidate
 
 
+def store_document(
+    connection,
+    docs: Path,
+    display_name: str,
+    entry_id: int,
+    index: int,
+    payload: bytes,
+) -> Path:
+    """Grava o arquivo e a linha. Se a linha falha, apaga o arquivo desta tentativa."""
+    docs.mkdir(parents=True, exist_ok=True)
+    target = document_target(docs, display_name, entry_id, index)
+    target.write_bytes(payload)
+    try:
+        connection.execute(
+            """
+            INSERT INTO documento (entrada_id, caminho, nome)
+            VALUES (?, ?, ?)
+            """,
+            (entry_id, str(target), display_name),
+        )
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return target
+
+
 def ensure_user_data(root: Path | None = None) -> Path:
     """Cria a pasta se faltar. Não apaga o que já está nela."""
     chosen = Path(root) if root is not None else default_user_data_dir()

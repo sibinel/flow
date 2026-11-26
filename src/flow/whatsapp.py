@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from flow.incoming import keep_each, open_entry, scoped_message_id
-from flow.paths import document_target, package_dir, whatsapp_session
+from flow.paths import package_dir, store_document, whatsapp_session
 from flow.send import SendTool
 
 
@@ -91,16 +91,7 @@ class WhatsAppReader:
         for index, item in enumerate(attachments, start=1):
             name = Path(str(item.get("name") or "anexo")).name
             payload = base64.b64decode(str(item.get("data_b64") or ""), validate=True)
-            self._docs.mkdir(parents=True, exist_ok=True)
-            target = document_target(self._docs, name, entry_id, index)
-            target.write_bytes(payload)
-            self._db.execute(
-                """
-                INSERT INTO documento (entrada_id, caminho, nome)
-                VALUES (?, ?, ?)
-                """,
-                (entry_id, str(target), name),
-            )
+            store_document(self._db, self._docs, name, entry_id, index, payload)
         return entry_id
 
 

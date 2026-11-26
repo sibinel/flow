@@ -13,7 +13,7 @@ from email.utils import parseaddr
 from pathlib import Path
 
 from flow.incoming import keep_each, open_entry
-from flow.paths import document_target
+from flow.paths import store_document
 
 
 class ImapReader:
@@ -53,15 +53,7 @@ class ImapReader:
         if entry_id is None:
             return None
         for index, (filename, payload) in enumerate(attachments, start=1):
-            target = document_target(self._docs, filename, entry_id, index)
-            target.write_bytes(payload)
-            self._db.execute(
-                """
-                INSERT INTO documento (entrada_id, caminho, nome)
-                VALUES (?, ?, ?)
-                """,
-                (entry_id, str(target), filename),
-            )
+            store_document(self._db, self._docs, filename, entry_id, index, payload)
         return entry_id
 
 
