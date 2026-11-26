@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import unittest
@@ -271,10 +272,10 @@ class IncomingBatchTest(unittest.TestCase):
         video = scoped_message_id("whatsapp", "+5511987654321", "mid-video")
         grande = scoped_message_id("whatsapp", "+5511987654321", "mid-grande")
         erro = scoped_message_id("whatsapp", "+5511987654321", "mid-erro")
-        self.assertEqual(rows[video]["estado"], "nova")
+        self.assertEqual(rows[video]["estado"], "pendente")
         self.assertIn("olha o vídeo", rows[video]["texto"])
         self.assertIn("mídia não baixada: vídeo", rows[video]["texto"])
-        self.assertIsNone(rows[video]["motivo"])
+        self.assertEqual(rows[video]["motivo"], "mídia não baixada")
         self.assertEqual(rows[grande]["estado"], "pendente")
         self.assertEqual(rows[grande]["motivo"], "mídia não baixada")
         self.assertIn("acima de 15 MB", rows[grande]["texto"])
@@ -282,9 +283,67 @@ class IncomingBatchTest(unittest.TestCase):
         self.assertEqual(rows[erro]["motivo"], "mídia não baixada")
         self.assertIn("documento", rows[erro]["texto"])
 
+        def retry(folder: Path, op: str, payload: dict) -> dict:
+            return {
+                "messages": [
+                    {
+                        "id": "mid-video",
+                        "from": "+5511987654321",
+                        "text": "olha o vídeo",
+                        "received_at": "2026-11-22T13:00:00-03:00",
+                        "attachments": [
+                            {
+                                "name": "video.mp4",
+                                "data_b64": base64.b64encode(b"video").decode("ascii"),
+                            }
+                        ],
+                    },
+                    {
+                        "id": "mid-grande",
+                        "from": "+5511987654321",
+                        "text": "",
+                        "received_at": "2026-11-22T13:01:00-03:00",
+                        "attachments": [],
+                        "media_note": "mídia não baixada: imagem acima de 15 MB",
+                    },
+                ]
+            }
+
+        again = self.controller.ingest_whatsapp(retry)
+        self.assertEqual(again, [ids[0]])
+        self.assertEqual(
+            self.db.execute("SELECT COUNT(*) FROM entrada WHERE mensagem_id = ?", (video,)).fetchone()[0],
+            1,
+        )
+        stored = self.db.execute(
+            """
+            SELECT entrada.texto, entrada.estado, pendencia.motivo, documento.nome
+            FROM entrada
+            LEFT JOIN pendencia ON pendencia.entrada_id = entrada.id
+            LEFT JOIN documento ON documento.entrada_id = entrada.id
+            WHERE entrada.mensagem_id = ?
+            """,
+            (video,),
+        ).fetchone()
+        self.assertEqual(stored["estado"], "nova")
+        self.assertEqual(stored["texto"], "olha o vídeo")
+        self.assertIsNone(stored["motivo"])
+        self.assertEqual(stored["nome"], "video.mp4")
+        self.assertEqual(
+            self.db.execute(
+                "SELECT COUNT(*) FROM entrada WHERE mensagem_id = ?",
+                (grande,),
+            ).fetchone()[0],
+            1,
+        )
+
         bridge = (package_dir() / "baileys" / "bridge.mjs").read_text(encoding="utf-8")
         self.assertIn("media_note", bridge)
         self.assertIn("acima de 15 MB", bridge)
+        self.assertIn("audioMessage", bridge)
+        self.assertIn("stickerMessage", bridge)
+        self.assertIn("cursor.json", bridge)
+        self.assertIn("fetchMessageHistory", bridge)
         self.assertNotIn("if (!text && !attachment) continue", bridge)
 
     def test_cycle_keeps_the_batch_when_one_message_fails(self) -> None:

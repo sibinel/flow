@@ -82,6 +82,7 @@ def open_entry(
     has_text: bool,
     has_file: bool,
     account: str,
+    media_failed: bool = False,
 ) -> int | None:
     """Grava a entrada. Id já visto nesta conta devolve None. Contato sem cliente fica pendente."""
     stored_id = scoped_message_id(kind, value, message_id)
@@ -91,7 +92,7 @@ def open_entry(
     reason = None
     if not known:
         reason = "contato novo"
-    elif not has_text and not has_file:
+    elif media_failed or (not has_text and not has_file):
         reason = "mídia não baixada"
     received = stored_received(received_at)
     if received is None and reason is None:

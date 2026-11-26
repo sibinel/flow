@@ -2,7 +2,7 @@
  * Ponte da sessão Web. Conta pessoal, protocolo do WhatsApp Web, sem navegador.
  * Sem credenciais registradas, leitura e envio saem antes de abrir a conexão.
  */
-import { existsSync, readFileSync, unlinkSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import pino from 'pino'
 import QRCode from 'qrcode'
@@ -182,6 +182,91 @@ function mediaLabel(kind) {
   return names[kind] || ''
 }
 
+const DOWNLOADABLE = new Set([
+  'imageMessage',
+  'documentMessage',
+  'videoMessage',
+  'ptvMessage',
+  'audioMessage',
+  'stickerMessage',
+])
+
+const FILE_NAMES = {
+  imageMessage: 'imagem.jpg',
+  documentMessage: 'anexo',
+  videoMessage: 'video.mp4',
+  ptvMessage: 'video.mp4',
+  audioMessage: 'audio.ogg',
+  stickerMessage: 'figurinha.webp',
+}
+
+function cursorFile(folder) {
+  return path.join(folder, 'cursor.json')
+}
+
+function loadCursor(folder) {
+  try {
+    const data = JSON.parse(readFileSync(cursorFile(folder), 'utf8'))
+    return data && typeof data === 'object' ? data : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveCursor(folder, cursor) {
+  writeFileSync(cursorFile(folder), JSON.stringify(cursor))
+}
+
+async function askGap(sock, cursor) {
+  if (typeof sock.fetchMessageHistory !== 'function') return
+  for (const [chat, mark] of Object.entries(cursor)) {
+    const digits = String(chat).replace(/\D/g, '')
+    if (!digits || !mark || !mark.id) continue
+    const seconds = Date.parse(mark.time)
+    if (!Number.isFinite(seconds)) continue
+    try {
+      await sock.fetchMessageHistory(
+        50,
+        { remoteJid: `${digits}@s.whatsapp.net`, id: String(mark.id), fromMe: false },
+        Math.floor(seconds / 1000),
+      )
+    } catch {
+      // a janela ao vivo ainda entrega o que conseguir
+    }
+  }
+}
+
+function applyCursor(folder, messages) {
+  const cursor = loadCursor(folder)
+  const byChat = new Map()
+  for (const message of messages) {
+    const list = byChat.get(message.from) || []
+    list.push(message)
+    byChat.set(message.from, list)
+  }
+  const kept = []
+  const next = { ...cursor }
+  for (const [chat, list] of byChat) {
+    list.sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)))
+    const mark = cursor[chat]
+    let advanced = mark ? { id: mark.id, time: mark.time } : null
+    let blocked = false
+    for (const message of list) {
+      const after = !mark || String(message.received_at) >= String(mark.time)
+      if (after) kept.push(message)
+      if (blocked) continue
+      if (message.media_note) {
+        blocked = true
+        continue
+      }
+      advanced = { id: message.id, time: message.received_at }
+    }
+    if (advanced) next[chat] = advanced
+  }
+  saveCursor(folder, next)
+  return kept
+}
+
 async function attachmentOf(msg, sock) {
   const content = extractMessageContent(msg.message) || {}
   const kind = getContentType(content)
@@ -189,8 +274,8 @@ async function attachmentOf(msg, sock) {
     return { file: null, note: '' }
   }
   const label = mediaLabel(kind) || kind
-  if (kind !== 'imageMessage' && kind !== 'documentMessage') {
-    return { file: null, note: `mídia não baixada: ${label}` }
+  if (!DOWNLOADABLE.has(kind)) {
+    return { file: null, note: '' }
   }
   const media = content[kind] || {}
   try {
@@ -204,7 +289,7 @@ async function attachmentOf(msg, sock) {
       const why = buffer && buffer.length > 15 * 1024 * 1024 ? ' acima de 15 MB' : ''
       return { file: null, note: `mídia não baixada: ${label}${why}` }
     }
-    const name = media.fileName || (kind === 'imageMessage' ? 'imagem.jpg' : 'anexo')
+    const name = media.fileName || FILE_NAMES[kind] || 'anexo'
     return {
       file: { name: path.basename(String(name)), data_b64: Buffer.from(buffer).toString('base64') },
       note: '',
@@ -223,6 +308,7 @@ function isoTime(msg) {
 
 async function readMessages(folder) {
   const collected = new Map()
+  const cursor = loadCursor(folder)
   const sock = await connect(folder, false, (socket) => {
     const take = (list) => {
       for (const msg of list || []) {
@@ -234,6 +320,7 @@ async function readMessages(folder) {
     socket.ev.on('messaging-history.set', ({ messages }) => take(messages))
     socket.ev.on('messages.upsert', ({ messages }) => take(messages))
   })
+  await askGap(sock, cursor)
   await new Promise((resolve) => {
     const timer = setTimeout(resolve, 8000)
     sock.ev.on('messaging-history.set', ({ isLatest }) => {
@@ -258,7 +345,7 @@ async function readMessages(folder) {
     })
   }
   end(sock)
-  return { messages }
+  return { messages: applyCursor(folder, messages) }
 }
 
 async function sendMessage(folder) {
