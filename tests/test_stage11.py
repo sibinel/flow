@@ -10,6 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+def _model(text: str) -> dict:
+    return {"choices": [{"message": {"content": text}}]}
+
 from flow.controller import Controller
 from flow.paths import package_dir, whatsapp_session
 from flow.store import open_database
@@ -49,8 +52,14 @@ class WindowLinkTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.controller = Controller(Path(self.tmp.name))
         self.db = open_database(self.controller.database_path.parent)
+        self._model = patch(
+            "flow.llm.post_chat",
+            return_value=_model("Pode protocolar a rescisão."),
+        )
+        self._model.start()
 
     def tearDown(self) -> None:
+        self._model.stop()
         self.db.close()
         self.controller.close()
         self.tmp.cleanup()
@@ -108,8 +117,17 @@ class WindowLinkTest(unittest.TestCase):
         self.assertIn("controller.approve(", qml)
         self.assertIn("controller.indicate(", qml)
 
-    def test_outside_the_slot_nothing_leaves_and_nothing_is_collected(self) -> None:
-        self._prepare_queue()
+    def test_late_open_runs_the_morning_slot_once(self) -> None:
+        _bruno, phone, clean = self._prepare_queue()
+        later = _entry(
+            self.db,
+            None,
+            phone,
+            "Mensagem das 09:30.",
+            "2026-11-23T09:30:00",
+            "nova",
+        )
+        self.db.commit()
         self._write_mail_account()
         self._write_session()
         seen: list[str] = []
@@ -125,12 +143,20 @@ class WindowLinkTest(unittest.TestCase):
         with patch("flow.controller.ImapReader.ingest", mail), patch(
             "flow.controller.WhatsAppReader.ingest", whatsapp
         ):
-            closed = self.controller._tick(datetime(2026, 11, 23, 15, 0))
-        self.assertFalse(closed.ran)
-        self.assertEqual(seen, [])
+            early = self.controller._tick(datetime(2026, 11, 23, 7, 0))
+            opened = self.controller._tick(datetime(2026, 11, 23, 15, 0))
+            again = self.controller._tick(datetime(2026, 11, 23, 16, 0))
+        self.assertTrue(early.ran)
+        self.assertTrue(opened.ran)
+        self.assertFalse(again.ran)
+        self.assertEqual(seen, ["mail", "whatsapp", "mail", "whatsapp"])
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
         self.assertEqual(
-            self.db.execute("SELECT estado FROM entrada WHERE estado = 'nova'").fetchone()["estado"],
+            self.db.execute("SELECT estado FROM entrada WHERE id = ?", (clean,)).fetchone()["estado"],
+            "arquivada",
+        )
+        self.assertEqual(
+            self.db.execute("SELECT estado FROM entrada WHERE id = ?", (later,)).fetchone()["estado"],
             "nova",
         )
 
@@ -146,8 +172,10 @@ class WindowLinkTest(unittest.TestCase):
             seen.append(("whatsapp",))
             return []
 
-        with patch("flow.controller.ImapReader.ingest", mail), patch(
-            "flow.controller.WhatsAppReader.ingest", whatsapp
+        with (
+            patch("flow.controller.ImapReader.ingest", mail),
+            patch("flow.controller.WhatsAppReader.ingest", whatsapp),
+            patch("flow.llm.post_chat", return_value=_model("Pode protocolar a rescisão.")),
         ):
             skipped = self.controller._tick(datetime(2026, 11, 23, 8, 0))
         self.assertTrue(skipped.ran)
@@ -180,12 +208,22 @@ class WindowLinkTest(unittest.TestCase):
             "flow.controller.WhatsAppReader.ingest", whatsapp
         ):
             missed = self.controller._tick(datetime(2026, 11, 23, 8, 0))
+            held = self.db.execute(
+                "SELECT estado FROM entrada WHERE id = ?",
+                (clean,),
+            ).fetchone()["estado"]
             opened = self.controller._tick(datetime(2026, 11, 23, 19, 40))
-        self.assertFalse(missed.ran)
+        self.assertTrue(missed.ran)
+        self.assertEqual(held, "nova")
         self.assertTrue(opened.ran)
         self.assertEqual(
             seen,
-            [("mail", "imap.example.com", 993, "ana@example.com", "segredo"), ("whatsapp",)],
+            [
+                ("mail", "imap.example.com", 993, "ana@example.com", "segredo"),
+                ("whatsapp",),
+                ("mail", "imap.example.com", 993, "ana@example.com", "segredo"),
+                ("whatsapp",),
+            ],
         )
         self.assertEqual(
             self.db.execute("SELECT estado FROM entrada WHERE id = ?", (clean,)).fetchone()["estado"],

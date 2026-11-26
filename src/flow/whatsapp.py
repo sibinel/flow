@@ -15,9 +15,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from flow.incoming import keep_each, open_entry
-from flow.paths import document_target, package_dir, whatsapp_session
-from flow.send import SendTool
+from flow.incoming import keep_each, open_entry, scoped_message_id
+from flow.paths import package_dir, store_document, whatsapp_session
+from flow.send import (
+    SendTool,
+    claim_draft,
+    hold_draft,
+    record_delivery,
+    release_draft,
+    same_client,
+)
 
 
 class SessionRequired(RuntimeError):
@@ -71,32 +78,75 @@ class WhatsAppReader:
         else:
             text = original
         attachments = list(message.get("attachments") or [])
+        chat = str(message.get("from") or "")
+        stored_id = scoped_message_id("whatsapp", chat, str(message.get("id") or ""))
+        pending = self._pending_media(stored_id, chat)
+        if pending is not None:
+            if not attachments:
+                return None
+            self._store_files(pending, attachments)
+            self._db.execute(
+                """
+                DELETE FROM pendencia
+                WHERE entrada_id = ? AND motivo = 'mídia não baixada'
+                """,
+                (pending,),
+            )
+            still = self._db.execute(
+                "SELECT 1 FROM pendencia WHERE entrada_id = ?",
+                (pending,),
+            ).fetchone()
+            self._db.execute(
+                """
+                UPDATE entrada
+                SET texto = ?, estado = ?
+                WHERE id = ?
+                """,
+                (original or text, "pendente" if still else "nova", pending),
+            )
+            return pending
         entry_id = open_entry(
             self._db,
             kind="whatsapp",
-            value=str(message.get("from") or ""),
-            message_id=str(message.get("id") or "").strip(),
+            value=chat,
+            message_id=stored_id,
             received_at=str(message.get("received_at") or ""),
             text=text,
             has_text=bool(original),
             has_file=bool(attachments),
+            account="whatsapp",
+            media_failed=bool(note) and not attachments,
         )
         if entry_id is None:
             return None
+        self._store_files(entry_id, attachments)
+        return entry_id
+
+    def _pending_media(self, stored_id: str, chat: str) -> int | None:
+        """Mídia que falhou não fecha o id. A próxima leitura pode completar."""
+        if not stored_id:
+            return None
+        row = self._db.execute(
+            """
+            SELECT entrada.id
+            FROM entrada
+            JOIN pendencia ON pendencia.entrada_id = entrada.id
+            WHERE entrada.canal = 'whatsapp'
+              AND entrada.mensagem_id = ?
+              AND entrada.conta IN ('whatsapp', ?)
+              AND pendencia.motivo = 'mídia não baixada'
+            """,
+            (stored_id, chat),
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row["id"])
+
+    def _store_files(self, entry_id: int, attachments: list) -> None:
         for index, item in enumerate(attachments, start=1):
             name = Path(str(item.get("name") or "anexo")).name
             payload = base64.b64decode(str(item.get("data_b64") or ""), validate=True)
-            self._docs.mkdir(parents=True, exist_ok=True)
-            target = document_target(self._docs, name, entry_id, index)
-            target.write_bytes(payload)
-            self._db.execute(
-                """
-                INSERT INTO documento (entrada_id, caminho, nome)
-                VALUES (?, ?, ?)
-                """,
-                (entry_id, str(target), name),
-            )
-        return entry_id
+            store_document(self._db, self._docs, name, entry_id, index, payload)
 
 
 class WhatsAppSender:
@@ -112,12 +162,14 @@ class WhatsAppSender:
         return (self._tool.name,)
 
     def send(self, draft_id: int) -> bool:
-        """Entrega e diz se saiu. Não grava envio nem marca o rascunho."""
+        """Entrega o rascunho aprovado. Grava em curso antes de sair."""
         if _already_sent(self._db, draft_id):
             return False
         row = self._db.execute(
             """
-            SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor
+            SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor,
+                   entrada.cliente_id AS entrada_cliente,
+                   contato.cliente_id AS contato_cliente
             FROM rascunho
             JOIN entrada ON entrada.id = rascunho.entrada_id
             JOIN contato ON contato.id = entrada.contato_id
@@ -127,9 +179,19 @@ class WhatsAppSender:
         ).fetchone()
         if row is None or row["estado"] != "aprovado" or row["tipo"] != "whatsapp":
             return False
+        if not same_client(row["entrada_cliente"], row["contato_cliente"]):
+            hold_draft(self._db, draft_id)
+            return False
         session = _require_session(self._data_dir)
+        if not claim_draft(self._db, draft_id):
+            return False
         self._tool = SendTool()
-        self._runner(session, "send", {"to": row["valor"], "text": row["texto"]})
+        outcome = self._runner(session, "send", {"to": row["valor"], "text": row["texto"]})
+        if outcome is False:
+            self._tool = None
+            release_draft(self._db, draft_id)
+            return False
+        record_delivery(self._db, draft_id, "whatsapp")
         return True
 
 

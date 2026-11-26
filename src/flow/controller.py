@@ -14,7 +14,7 @@ from flow.harness import Harness
 from flow.llm import CloudLLM
 from flow.mail import ImapReader, load_mail_account
 from flow.paths import ensure_user_data, whatsapp_session
-from flow.send import SmtpSender
+from flow.send import SmtpSender, load_smtp_target
 from flow.whatsapp import WhatsAppReader, WhatsAppSender, pair, session_ready
 from flow.queue import RecordModel
 from flow.store import database_file, ensure_demo, open_database
@@ -23,6 +23,7 @@ _STOPPED = "Leitura e envio de WhatsApp estão parados."
 
 
 class Controller(QObject):
+    backgroundDone = Signal()
     surfaceChanged = Signal()
 
     def __init__(self, data_root: Path | None = None) -> None:
@@ -34,9 +35,11 @@ class Controller(QObject):
         self._clock: QTimer | None = None
         self._qr_clock: QTimer | None = None
         self._pairing = False
+        self._cycle_thread: threading.Thread | None = None
+        self.backgroundDone.connect(self._reload)
         if data_root is None:
             ensure_demo(self._db)
-        self._drafts = RecordModel(["draftId", "text", "address", "channel"])
+        self._drafts = RecordModel(["draftId", "text", "address", "channel", "state"])
         self._pendings = RecordModel(["entryId", "text", "reason"])
         self._clients = RecordModel(["clientId", "name"])
         self._processes = RecordModel(["processId", "label"])
@@ -55,7 +58,7 @@ class Controller(QObject):
             return
         self._clock = QTimer(self)
         self._clock.setInterval(15000)
-        self._clock.timeout.connect(self._tick)
+        self._clock.timeout.connect(self._start_background_cycle)
         self._clock.start()
         self._qr_clock = QTimer(self)
         self._qr_clock.setInterval(400)
@@ -66,35 +69,61 @@ class Controller(QObject):
         moment = datetime.now().astimezone() if now is None else now
         return self.run_cycle(moment, self._dispatch_approved)
 
-    def _collect(self) -> None:
+    def _start_background_cycle(self) -> None:
+        """O relógio da janela não espera a rede."""
+        if self._cycle_thread is not None and self._cycle_thread.is_alive():
+            return
+        self._cycle_thread = threading.Thread(target=self._run_background_cycle, daemon=True)
+        self._cycle_thread.start()
+
+    def _run_background_cycle(self) -> None:
+        db = open_database(self._data_dir)
+        try:
+            try:
+                DayCycle(db, self._data_dir).run(
+                    datetime.now().astimezone(),
+                    lambda draft_id, channel: self._dispatch_approved(draft_id, channel, db),
+                    lambda: self._collect(db),
+                )
+            except Exception:
+                db.rollback()
+        finally:
+            db.close()
+            self.backgroundDone.emit()
+
+    def _collect(self, connection=None) -> None:
         """Coleta antes da fila. Sem conta ou sem sessão, esse lado não corre."""
+        db = self._db if connection is None else connection
         account = load_mail_account(self._data_dir)
         if account is not None:
-            ImapReader(self._db, self._data_dir).ingest(
-                account.host,
-                account.port,
+            ImapReader(db, self._data_dir).ingest(
+                account.imap_host,
+                account.imap_port,
                 account.user,
                 account.password,
             )
         if session_ready(whatsapp_session(self._data_dir)):
-            WhatsAppReader(self._db, self._data_dir).ingest()
+            WhatsAppReader(db, self._data_dir).ingest()
 
-    def _dispatch_approved(self, draft_id: int, channel: str) -> bool:
+    def _dispatch_approved(self, draft_id: int, channel: str, connection=None) -> bool:
+        db = self._db if connection is None else connection
         if channel == "email":
             account = load_mail_account(self._data_dir)
-            if account is None:
+            target = load_smtp_target(self._data_dir)
+            if account is None or target is None:
                 return False
-            return SmtpSender(self._db).send(
+            host, port = target
+            return SmtpSender(db).send(
                 draft_id,
-                account.host,
-                account.port,
+                host,
+                port,
                 account.user,
                 account.password,
             )
         if channel == "whatsapp":
             if not session_ready(whatsapp_session(self._data_dir)):
                 return False
-            return WhatsAppSender(self._db, self._data_dir).send(draft_id)
+            return WhatsAppSender(db, self._data_dir).send(draft_id)
         return False
 
     def _watch_qr(self) -> None:
@@ -230,11 +259,14 @@ class Controller(QObject):
     ) -> bool:
         """Envia só rascunho aprovado. Sem aprovação, a tool de envio não entra."""
         sender_tool = SmtpSender(self._db)
-        if not sender_tool.send(draft_id, host, port, sender, password):
-            return False
+        try:
+            sent = sender_tool.send(draft_id, host, port, sender, password)
+        except Exception:
+            self._reload()
+            raise
         self._db.commit()
         self._reload()
-        return True
+        return sent
 
     def ingest_whatsapp(self, runner=None) -> list[int]:
         """Lê o WhatsApp. Sem sessão gravada, para até um QR novo. Não envia."""
@@ -246,11 +278,14 @@ class Controller(QObject):
     def send_approved_whatsapp(self, draft_id: int, runner=None) -> bool:
         """Envia só rascunho aprovado. Sem sessão, a tool de envio não entra."""
         sender = WhatsAppSender(self._db, self._data_dir, runner)
-        if not sender.send(draft_id):
-            return False
+        try:
+            sent = sender.send(draft_id)
+        except Exception:
+            self._reload()
+            raise
         self._db.commit()
         self._reload()
-        return True
+        return sent
 
     @Slot()
     def pair_whatsapp(self, runner=None) -> None:
@@ -299,13 +334,31 @@ class Controller(QObject):
     @Slot(str, result=int)
     def search(self, phrase: str, transport=None) -> int:
         """Busca trechos do cliente citado e grava o rascunho. Não envia."""
-        hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
-        self._reload()
-        return hit.draft_id
+        if transport is not None:
+            hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
+            self._reload()
+            return hit.draft_id
+        threading.Thread(target=self._search_away, args=(phrase,), daemon=True).start()
+        return 0
+
+    def _search_away(self, phrase: str) -> None:
+        db = open_database(self._data_dir)
+        try:
+            try:
+                Harness(db, CloudLLM(db)).search(phrase)
+            except Exception:
+                db.rollback()
+        finally:
+            db.close()
+            self.backgroundDone.emit()
 
     def run_cycle(self, now, dispatch=None, config=None):
         """Monta a fila no horário e envia o que já foi aprovado. Fora dele, não envia."""
-        queue = DayCycle(self._db, self._data_dir, config).run(now, dispatch, self._collect)
+        try:
+            queue = DayCycle(self._db, self._data_dir, config).run(now, dispatch, self._collect)
+        except Exception:
+            self._reload()
+            raise
         if queue.ran:
             self._reload()
         return queue
@@ -334,14 +387,16 @@ class Controller(QObject):
                     "text": row["texto"],
                     "address": row["valor"],
                     "channel": row["tipo"],
+                    "state": row["estado"],
                 }
                 for row in self._db.execute(
                     """
-                    SELECT rascunho.id, rascunho.texto, contato.valor, contato.tipo
+                    SELECT rascunho.id, rascunho.texto, rascunho.estado,
+                           contato.valor, contato.tipo
                     FROM rascunho
                     JOIN entrada ON entrada.id = rascunho.entrada_id
                     JOIN contato ON contato.id = entrada.contato_id
-                    WHERE rascunho.estado = 'aguardando'
+                    WHERE rascunho.estado IN ('aguardando', 'em curso')
                     ORDER BY rascunho.id
                     """
                 )

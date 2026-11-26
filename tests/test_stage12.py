@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from flow.controller import Controller
+from flow.incoming import scoped_message_id
 from flow.mail import ImapReader
 from flow.paths import package_dir, whatsapp_session
 from flow.store import open_database
@@ -156,11 +158,21 @@ class IncomingBatchTest(unittest.TestCase):
                    pendencia.motivo
             FROM entrada
             LEFT JOIN pendencia ON pendencia.entrada_id = entrada.id
-            WHERE entrada.mensagem_id IN ('w-1', 'w-2', 'w-3')
+            WHERE entrada.mensagem_id IN (?, ?)
             ORDER BY entrada.id
-            """
+            """,
+            (
+                scoped_message_id("whatsapp", "+5511987654321", "w-1"),
+                scoped_message_id("whatsapp", "+5511900001111", "w-3"),
+            ),
         ).fetchall()
-        self.assertEqual([row["mensagem_id"] for row in kept], ["w-1", "w-3"])
+        self.assertEqual(
+            [row["mensagem_id"] for row in kept],
+            [
+                scoped_message_id("whatsapp", "+5511987654321", "w-1"),
+                scoped_message_id("whatsapp", "+5511900001111", "w-3"),
+            ],
+        )
         self.assertEqual(kept[0]["estado"], "nova")
         self.assertEqual(kept[1]["texto"], "número novo")
         self.assertEqual(kept[1]["estado"], "pendente")
@@ -205,7 +217,8 @@ class IncomingBatchTest(unittest.TestCase):
         repeated = self.controller.ingest_whatsapp(runner)
         self.assertEqual(repeated, [])
         found = self.db.execute(
-            "SELECT COUNT(*) FROM entrada WHERE mensagem_id = 'wa-9'"
+            "SELECT COUNT(*) FROM entrada WHERE mensagem_id = ?",
+            (scoped_message_id("whatsapp", "+5511987654321", "wa-9"),),
         ).fetchone()[0]
         self.assertEqual(found, 1)
 
@@ -256,20 +269,81 @@ class IncomingBatchTest(unittest.TestCase):
                 """
             )
         }
-        self.assertEqual(rows["mid-video"]["estado"], "nova")
-        self.assertIn("olha o vídeo", rows["mid-video"]["texto"])
-        self.assertIn("mídia não baixada: vídeo", rows["mid-video"]["texto"])
-        self.assertIsNone(rows["mid-video"]["motivo"])
-        self.assertEqual(rows["mid-grande"]["estado"], "pendente")
-        self.assertEqual(rows["mid-grande"]["motivo"], "mídia não baixada")
-        self.assertIn("acima de 15 MB", rows["mid-grande"]["texto"])
-        self.assertEqual(rows["mid-erro"]["estado"], "pendente")
-        self.assertEqual(rows["mid-erro"]["motivo"], "mídia não baixada")
-        self.assertIn("documento", rows["mid-erro"]["texto"])
+        video = scoped_message_id("whatsapp", "+5511987654321", "mid-video")
+        grande = scoped_message_id("whatsapp", "+5511987654321", "mid-grande")
+        erro = scoped_message_id("whatsapp", "+5511987654321", "mid-erro")
+        self.assertEqual(rows[video]["estado"], "pendente")
+        self.assertIn("olha o vídeo", rows[video]["texto"])
+        self.assertIn("mídia não baixada: vídeo", rows[video]["texto"])
+        self.assertEqual(rows[video]["motivo"], "mídia não baixada")
+        self.assertEqual(rows[grande]["estado"], "pendente")
+        self.assertEqual(rows[grande]["motivo"], "mídia não baixada")
+        self.assertIn("acima de 15 MB", rows[grande]["texto"])
+        self.assertEqual(rows[erro]["estado"], "pendente")
+        self.assertEqual(rows[erro]["motivo"], "mídia não baixada")
+        self.assertIn("documento", rows[erro]["texto"])
+
+        def retry(folder: Path, op: str, payload: dict) -> dict:
+            return {
+                "messages": [
+                    {
+                        "id": "mid-video",
+                        "from": "+5511987654321",
+                        "text": "olha o vídeo",
+                        "received_at": "2026-11-22T13:00:00-03:00",
+                        "attachments": [
+                            {
+                                "name": "video.mp4",
+                                "data_b64": base64.b64encode(b"video").decode("ascii"),
+                            }
+                        ],
+                    },
+                    {
+                        "id": "mid-grande",
+                        "from": "+5511987654321",
+                        "text": "",
+                        "received_at": "2026-11-22T13:01:00-03:00",
+                        "attachments": [],
+                        "media_note": "mídia não baixada: imagem acima de 15 MB",
+                    },
+                ]
+            }
+
+        again = self.controller.ingest_whatsapp(retry)
+        self.assertEqual(again, [ids[0]])
+        self.assertEqual(
+            self.db.execute("SELECT COUNT(*) FROM entrada WHERE mensagem_id = ?", (video,)).fetchone()[0],
+            1,
+        )
+        stored = self.db.execute(
+            """
+            SELECT entrada.texto, entrada.estado, pendencia.motivo, documento.nome
+            FROM entrada
+            LEFT JOIN pendencia ON pendencia.entrada_id = entrada.id
+            LEFT JOIN documento ON documento.entrada_id = entrada.id
+            WHERE entrada.mensagem_id = ?
+            """,
+            (video,),
+        ).fetchone()
+        self.assertEqual(stored["estado"], "nova")
+        self.assertEqual(stored["texto"], "olha o vídeo")
+        self.assertIsNone(stored["motivo"])
+        self.assertEqual(stored["nome"], "video.mp4")
+        self.assertEqual(
+            self.db.execute(
+                "SELECT COUNT(*) FROM entrada WHERE mensagem_id = ?",
+                (grande,),
+            ).fetchone()[0],
+            1,
+        )
 
         bridge = (package_dir() / "baileys" / "bridge.mjs").read_text(encoding="utf-8")
         self.assertIn("media_note", bridge)
         self.assertIn("acima de 15 MB", bridge)
+        self.assertIn("audioMessage", bridge)
+        self.assertIn("stickerMessage", bridge)
+        self.assertIn("cursor.json", bridge)
+        self.assertIn("fetchMessageHistory", bridge)
         self.assertNotIn("if (!text && !attachment) continue", bridge)
 
     def test_cycle_keeps_the_batch_when_one_message_fails(self) -> None:

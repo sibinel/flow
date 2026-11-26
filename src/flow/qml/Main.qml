@@ -193,6 +193,7 @@ ApplicationWindow {
                                 required property string text
                                 required property string address
                                 required property string channel
+                                required property string state
                                 width: draftsView.width
                                 implicitHeight: Math.max(draftRow.implicitHeight + 20, 64)
                                 radius: 10
@@ -234,8 +235,17 @@ ApplicationWindow {
                                             wrapMode: Text.WordWrap
                                             Layout.fillWidth: true
                                         }
+                                        Label {
+                                            visible: draftCard.state === "em curso"
+                                            text: "Em curso"
+                                            color: "#facc15"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
                                     }
                                     Button {
+                                        visible: draftCard.state === "aguardando"
                                         text: "Aprovar"
                                         implicitHeight: 40
                                         leftPadding: 18

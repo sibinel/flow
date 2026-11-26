@@ -35,12 +35,10 @@ CREATE TABLE IF NOT EXISTS entrada (
     recebido_em TEXT NOT NULL,
     texto TEXT NOT NULL,
     estado TEXT NOT NULL CHECK (estado IN ('nova', 'pendente', 'arquivada')),
-    mensagem_id TEXT
+    mensagem_id TEXT,
+    canal TEXT,
+    conta TEXT
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS entrada_mensagem_id
-ON entrada(mensagem_id)
-WHERE mensagem_id IS NOT NULL AND mensagem_id != '';
 
 CREATE TABLE IF NOT EXISTS documento (
     id INTEGER PRIMARY KEY,
@@ -53,7 +51,8 @@ CREATE TABLE IF NOT EXISTS pendencia (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
     motivo TEXT NOT NULL CHECK (motivo IN (
-        'nome diferente', 'contato novo', 'processo não citado', 'mídia não baixada'
+        'nome diferente', 'contato novo', 'processo não citado',
+        'mídia não baixada', 'data ilegível'
     ))
 );
 
@@ -61,7 +60,7 @@ CREATE TABLE IF NOT EXISTS rascunho (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
     texto TEXT NOT NULL,
-    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado'))
+    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado', 'em curso'))
 );
 
 CREATE TABLE IF NOT EXISTS envio (
@@ -104,6 +103,42 @@ END;
 """
 
 
+def _scope_existing_messages(connection: sqlite3.Connection) -> None:
+    """Preenche canal e conta nas linhas já gravadas. Não apaga nenhuma."""
+    from flow.incoming import scoped_message_id
+
+    rows = connection.execute(
+        """
+        SELECT entrada.id, entrada.mensagem_id, entrada.canal, entrada.conta,
+               contato.tipo, contato.valor
+        FROM entrada
+        JOIN contato ON contato.id = entrada.contato_id
+        """
+    ).fetchall()
+    for row in rows:
+        canal = row["canal"] or row["tipo"]
+        message_id = row["mensagem_id"]
+        if row["tipo"] == "whatsapp":
+            conta = row["conta"] or "whatsapp"
+            scoped = scoped_message_id("whatsapp", row["valor"] or "", message_id or "")
+            message_id = scoped or None
+        else:
+            conta = row["conta"] or row["valor"] or ""
+        if (
+            canal != row["canal"]
+            or conta != row["conta"]
+            or message_id != row["mensagem_id"]
+        ):
+            connection.execute(
+                """
+                UPDATE entrada
+                SET canal = ?, conta = ?, mensagem_id = ?
+                WHERE id = ?
+                """,
+                (canal, conta, message_id, row["id"]),
+            )
+
+
 def database_file(data_dir: Path) -> Path:
     return data_dir / "flow.sqlite"
 
@@ -125,16 +160,23 @@ def _migrate(connection: sqlite3.Connection) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(entrada)")}
     if "mensagem_id" not in columns:
         connection.execute("ALTER TABLE entrada ADD COLUMN mensagem_id TEXT")
+    if "canal" not in columns:
+        connection.execute("ALTER TABLE entrada ADD COLUMN canal TEXT")
+    if "conta" not in columns:
+        connection.execute("ALTER TABLE entrada ADD COLUMN conta TEXT")
+    _scope_existing_messages(connection)
+    connection.execute("DROP INDEX IF EXISTS entrada_mensagem_id")
     connection.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS entrada_mensagem_id
-        ON entrada(mensagem_id)
+        CREATE UNIQUE INDEX entrada_mensagem_id
+        ON entrada(canal, conta, mensagem_id)
         WHERE mensagem_id IS NOT NULL AND mensagem_id != ''
         """
     )
     contato = list(connection.execute("PRAGMA table_info(contato)"))
     cliente = next(row for row in contato if row[1] == "cliente_id")
     if cliente[3]:
+        connection.commit()
         connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute(
             """
@@ -158,7 +200,8 @@ def _migrate(connection: sqlite3.Connection) -> None:
     pendencia = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pendencia'"
     ).fetchone()
-    if pendencia is not None and "mídia não baixada" not in pendencia["sql"]:
+    if pendencia is not None and "data ilegível" not in pendencia["sql"]:
+        connection.commit()
         connection.execute("PRAGMA foreign_keys = OFF")
         connection.execute(
             """
@@ -167,7 +210,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
                 entrada_id INTEGER NOT NULL REFERENCES entrada(id),
                 motivo TEXT NOT NULL CHECK (motivo IN (
                     'nome diferente', 'contato novo', 'processo não citado',
-                    'mídia não baixada'
+                    'mídia não baixada', 'data ilegível'
                 ))
             )
             """
@@ -181,6 +224,34 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute("DROP TABLE pendencia")
         connection.execute("ALTER TABLE pendencia_migrada RENAME TO pendencia")
         connection.execute("PRAGMA foreign_keys = ON")
+    rascunho = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rascunho'"
+    ).fetchone()
+    if rascunho is not None and "em curso" not in rascunho["sql"]:
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(
+            """
+            CREATE TABLE rascunho_migrado (
+                id INTEGER PRIMARY KEY,
+                entrada_id INTEGER NOT NULL REFERENCES entrada(id),
+                texto TEXT NOT NULL,
+                estado TEXT NOT NULL CHECK (
+                    estado IN ('aguardando', 'aprovado', 'enviado', 'em curso')
+                )
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO rascunho_migrado (id, entrada_id, texto, estado)
+            SELECT id, entrada_id, texto, estado FROM rascunho
+            """
+        )
+        connection.execute("DROP TABLE rascunho")
+        connection.execute("ALTER TABLE rascunho_migrado RENAME TO rascunho")
+        connection.execute("PRAGMA foreign_keys = ON")
+    connection.commit()
 
 
 _DEMO_CLIENTS = (

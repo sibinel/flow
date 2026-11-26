@@ -6,10 +6,12 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flow.classify import Classifier, ReadTool
+from flow.llm import CloudLLM
+from flow.when import parse_received
 
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -84,15 +86,19 @@ class DayCycle:
         save_config(self._data_dir, self.config)
 
     def run(self, now: datetime, dispatch=None, collect=None) -> CycleQueue:
-        """No horário, coleta, monta a fila e envia o aprovado. Fora dele, não envia."""
-        slot = self._open_slot(now)
-        if slot is None or self._done(now, slot):
+        """A vaga fica aberta até a próxima e roda uma vez. A coleta tem transação própria."""
+        slot_at = self._open_slot(now)
+        if slot_at is None or self._done(slot_at):
             return CycleQueue((), (), False, ())
-        try:
-            if collect is not None:
+        if collect is not None:
+            try:
                 collect()
-            sent = self._execute(now, dispatch)
-            drafts, pendings = self._queue(now)
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+        try:
+            sent = self._execute(slot_at, dispatch)
+            drafts, pendings = self._queue(slot_at)
             self._db.commit()
         except Exception:
             self._db.rollback()
@@ -100,21 +106,31 @@ class DayCycle:
         save_config(
             self._data_dir,
             self.config,
-            _at(now, slot).isoformat(timespec="seconds"),
+            slot_at.isoformat(timespec="seconds"),
         )
         return CycleQueue(drafts, pendings, True, tuple(sent))
 
-    def _open_slot(self, now: datetime) -> str | None:
-        stamp = now.strftime("%H:%M")
-        if stamp not in self.config.slots():
+    def _open_slot(self, now: datetime) -> datetime | None:
+        """A vaga que já começou e ainda não chegou na seguinte."""
+        slots = self.config.slots()
+        if not slots:
             return None
-        return stamp
+        clock = now.strftime("%H:%M")
+        started = [item for item in slots if item <= clock]
+        if started:
+            return _at(now, started[-1])
+        previous = now - timedelta(days=1)
+        return _at(previous, slots[-1])
 
-    def _done(self, now: datetime, slot: str) -> bool:
+    def _done(self, slot_at: datetime) -> bool:
         ultimo = self._ultimo()
         if ultimo is None:
             return False
-        return ultimo >= _at(now, slot)
+        if ultimo.tzinfo is None and slot_at.tzinfo is not None:
+            ultimo = ultimo.replace(tzinfo=slot_at.tzinfo)
+        elif slot_at.tzinfo is None and ultimo.tzinfo is not None:
+            slot_at = slot_at.replace(tzinfo=ultimo.tzinfo)
+        return ultimo >= slot_at
 
     def _ultimo(self) -> datetime | None:
         path = config_path(self._data_dir)
@@ -126,6 +142,7 @@ class DayCycle:
         return datetime.fromisoformat(raw)
 
     def _execute(self, now: datetime, dispatch) -> list[int]:
+        self._hold_unreadable()
         archived: list[int] = []
         for entry_id in self._due(now):
             if Classifier(ReadTool(self._db)).classify(entry_id) == "arquivada":
@@ -133,6 +150,28 @@ class DayCycle:
         for entry_id in archived:
             self._followup(entry_id)
         return self._send_approved(now, dispatch)
+
+    def _hold_unreadable(self) -> None:
+        """Data que não dá para ler vira pendência e fica fora da vaga."""
+        rows = self._db.execute(
+            "SELECT id, recebido_em FROM entrada WHERE estado = 'nova' ORDER BY id"
+        ).fetchall()
+        for row in rows:
+            if parse_received(row["recebido_em"]) is not None:
+                continue
+            self._db.execute(
+                "UPDATE entrada SET estado = 'pendente' WHERE id = ?",
+                (row["id"],),
+            )
+            found = self._db.execute(
+                "SELECT 1 FROM pendencia WHERE entrada_id = ? AND motivo = 'data ilegível'",
+                (row["id"],),
+            ).fetchone()
+            if found is None:
+                self._db.execute(
+                    "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, 'data ilegível')",
+                    (row["id"],),
+                )
 
     def _due(self, now: datetime) -> list[int]:
         due: list[int] = []
@@ -153,16 +192,30 @@ class DayCycle:
         ).fetchone()
         if found is not None:
             return
-        text = self._db.execute(
-            "SELECT texto FROM entrada WHERE id = ?",
+        entry = self._db.execute(
+            "SELECT texto, cliente_id FROM entrada WHERE id = ?",
             (entry_id,),
-        ).fetchone()["texto"]
+        ).fetchone()
+        if entry is None or entry["cliente_id"] is None:
+            return
+        try:
+            draft = CloudLLM(self._db).complete(
+                "rascunho",
+                client_id=int(entry["cliente_id"]),
+                message=entry["texto"],
+                query=entry["texto"],
+            )
+        except Exception:
+            return
+        text = draft.strip()
+        if not text:
+            return
         self._db.execute(
             """
             INSERT INTO rascunho (entrada_id, texto, estado)
             VALUES (?, ?, 'aguardando')
             """,
-            (entry_id, f"Retorno sobre: {text}"),
+            (entry_id, text),
         )
 
     def _send_approved(self, now: datetime, dispatch) -> list[int]:
@@ -187,20 +240,19 @@ class DayCycle:
                 continue
             if dispatch(draft_id, row["tipo"]) is not True:
                 continue
-            if _already_sent(self._db, draft_id):
-                continue
-            sent_at = _at(now, now.strftime("%H:%M")).isoformat(timespec="seconds")
-            self._db.execute(
-                """
-                INSERT INTO envio (rascunho_id, enviado_em, canal)
-                VALUES (?, ?, ?)
-                """,
-                (draft_id, sent_at, row["tipo"]),
-            )
-            self._db.execute(
-                "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
-                (draft_id,),
-            )
+            if not _already_sent(self._db, draft_id):
+                sent_at = _at(now, now.strftime("%H:%M")).isoformat(timespec="seconds")
+                self._db.execute(
+                    """
+                    INSERT INTO envio (rascunho_id, enviado_em, canal)
+                    VALUES (?, ?, ?)
+                    """,
+                    (draft_id, sent_at, row["tipo"]),
+                )
+                self._db.execute(
+                    "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
+                    (draft_id,),
+                )
             sent.append(draft_id)
         return sent
 
@@ -246,15 +298,9 @@ def _at(now: datetime, slot: str) -> datetime:
 
 
 def _at_or_before(value: str, now: datetime) -> bool:
-    text = (value or "").strip()
-    if not text:
-        return True
-    try:
-        stamp = datetime.fromisoformat(text)
-    except ValueError:
-        return True
-    if stamp.tzinfo is not None and now.tzinfo is None:
-        stamp = stamp.replace(tzinfo=None)
-    elif stamp.tzinfo is None and now.tzinfo is not None:
-        now = now.replace(tzinfo=None)
-    return stamp <= now
+    stamp = parse_received(value)
+    if stamp is None:
+        return False
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=stamp.tzinfo)
+    return stamp <= now.astimezone(stamp.tzinfo)
