@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from flow.classify import Classifier, ReadTool
+from flow.llm import CloudLLM
 from flow.when import parse_received
 
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -191,16 +192,30 @@ class DayCycle:
         ).fetchone()
         if found is not None:
             return
-        text = self._db.execute(
-            "SELECT texto FROM entrada WHERE id = ?",
+        entry = self._db.execute(
+            "SELECT texto, cliente_id FROM entrada WHERE id = ?",
             (entry_id,),
-        ).fetchone()["texto"]
+        ).fetchone()
+        if entry is None or entry["cliente_id"] is None:
+            return
+        try:
+            draft = CloudLLM(self._db).complete(
+                "rascunho",
+                client_id=int(entry["cliente_id"]),
+                message=entry["texto"],
+                query=entry["texto"],
+            )
+        except Exception:
+            return
+        text = draft.strip()
+        if not text:
+            return
         self._db.execute(
             """
             INSERT INTO rascunho (entrada_id, texto, estado)
             VALUES (?, ?, 'aguardando')
             """,
-            (entry_id, f"Retorno sobre: {text}"),
+            (entry_id, text),
         )
 
     def _send_approved(self, now: datetime, dispatch) -> list[int]:

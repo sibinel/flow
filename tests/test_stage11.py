@@ -10,6 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+def _model(text: str) -> dict:
+    return {"choices": [{"message": {"content": text}}]}
+
 from flow.controller import Controller
 from flow.paths import package_dir, whatsapp_session
 from flow.store import open_database
@@ -49,8 +52,14 @@ class WindowLinkTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.controller = Controller(Path(self.tmp.name))
         self.db = open_database(self.controller.database_path.parent)
+        self._model = patch(
+            "flow.llm.post_chat",
+            return_value=_model("Pode protocolar a rescisão."),
+        )
+        self._model.start()
 
     def tearDown(self) -> None:
+        self._model.stop()
         self.db.close()
         self.controller.close()
         self.tmp.cleanup()
@@ -163,8 +172,10 @@ class WindowLinkTest(unittest.TestCase):
             seen.append(("whatsapp",))
             return []
 
-        with patch("flow.controller.ImapReader.ingest", mail), patch(
-            "flow.controller.WhatsAppReader.ingest", whatsapp
+        with (
+            patch("flow.controller.ImapReader.ingest", mail),
+            patch("flow.controller.WhatsAppReader.ingest", whatsapp),
+            patch("flow.llm.post_chat", return_value=_model("Pode protocolar a rescisão.")),
         ):
             skipped = self.controller._tick(datetime(2026, 11, 23, 8, 0))
         self.assertTrue(skipped.ran)
