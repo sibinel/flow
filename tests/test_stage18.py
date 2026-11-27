@@ -15,6 +15,13 @@ from flow.send import load_smtp_target
 from flow.store import open_database
 
 
+def _approve(controller: Controller, draft_id: int) -> None:
+    controller._reload()
+    row = next(row for row in controller._drafts._rows if row["draftId"] == draft_id)
+    if not controller.approve(draft_id, str(row["approvalVersion"])):
+        raise AssertionError("approval failed")
+
+
 class SplitMailAccountTest(unittest.TestCase):
     def test_old_file_collects_and_does_not_send(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -120,11 +127,12 @@ class SplitMailAccountTest(unittest.TestCase):
                 (client, contact),
             ).lastrowid
             draft = db.execute(
-                "INSERT INTO rascunho (entrada_id, texto, estado) VALUES (?, 'Ana, confirmo.', 'aprovado')",
+                "INSERT INTO rascunho (entrada_id, texto, estado) VALUES (?, 'Ana, confirmo.', 'aguardando')",
                 (entry,),
             ).lastrowid
             db.commit()
             db.close()
+            _approve(controller, int(draft))
 
             seen: list[tuple] = []
             sent_to: list[tuple] = []

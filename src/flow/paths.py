@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import uuid
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -85,11 +87,31 @@ def store_document(
     index: int,
     payload: bytes,
 ) -> Path:
-    """Grava o arquivo e a linha. Se a linha falha, apaga o arquivo desta tentativa."""
+    """Registra a tentativa antes de escrever e nunca sobrescreve outro arquivo."""
+    if not connection.in_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    else:
+        connection.execute("UPDATE documento SET caminho = caminho WHERE 0")
     docs.mkdir(parents=True, exist_ok=True)
+    docs = docs.resolve()
+    pending = docs / ".flow-pending"
+    pending.mkdir(exist_ok=True)
+    token = uuid.uuid4().hex
     target = document_target(docs, display_name, entry_id, index)
-    target.write_bytes(payload)
+    stage = pending / f"{token}.part"
+    journal = pending / f"{token}.json"
+    with journal.open("x", encoding="utf-8") as file:
+        json.dump({"target": target.name}, file)
+        file.flush()
+        os.fsync(file.fileno())
+    attempt = _attempt_files.get()
+    if attempt is not None:
+        attempt.append((journal, stage, target))
+    if hasattr(connection, "track_documents"):
+        connection.track_documents(docs)
     try:
+        _write_staged(stage, payload)
+        os.link(stage, target)
         connection.execute(
             """
             INSERT INTO documento (entrada_id, caminho, nome)
@@ -98,12 +120,59 @@ def store_document(
             (entry_id, str(target), display_name),
         )
     except Exception:
-        target.unlink(missing_ok=True)
+        if attempt is None:
+            cleanup_attempt(connection, [(journal, stage, target)])
         raise
-    attempt = _attempt_files.get()
-    if attempt is not None:
-        attempt.append(target)
     return target
+
+
+def _write_staged(stage: Path, payload: bytes) -> None:
+    with stage.open("xb") as file:
+        file.write(payload)
+        file.flush()
+        os.fsync(file.fileno())
+
+
+def cleanup_attempt(connection, files: list) -> None:
+    """Remove apenas caminhos registrados sem documento na transação atual."""
+    for journal, stage, target in files:
+        confirmed = connection.execute(
+            "SELECT 1 FROM documento WHERE caminho = ? LIMIT 1", (str(target),)
+        ).fetchone()
+        if confirmed is None and stage.exists() and target.exists() and stage.samefile(target):
+            target.unlink(missing_ok=True)
+        stage.unlink(missing_ok=True)
+        journal.unlink(missing_ok=True)
+
+
+def recover_documents(connection, docs: Path) -> None:
+    """Reconcilia registros após commit, rollback ou interrupção, sob trava SQLite."""
+    pending = docs.resolve() / ".flow-pending"
+    if not pending.is_dir() or connection.in_transaction:
+        return
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        for journal in pending.glob("*.json"):
+            token = journal.stem
+            if len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token):
+                continue
+            try:
+                data = json.loads(journal.read_text(encoding="utf-8"))
+                name = data["target"]
+                if not isinstance(name, str) or Path(name).name != name or name in {"", ".", ".."}:
+                    continue
+                target = docs.resolve() / name
+                cleanup_attempt(connection, [(journal, pending / f"{token}.part", target)])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        try:
+            pending.rmdir()
+        except OSError:
+            pass
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def ensure_user_data(root: Path | None = None) -> Path:

@@ -10,6 +10,12 @@ from flow.controller import Controller
 from flow.store import open_database
 
 
+def _approval_version(controller: Controller, draft_id: int) -> str:
+    controller._reload()
+    row = next(row for row in controller._drafts._rows if row["draftId"] == draft_id)
+    return str(row["approvalVersion"])
+
+
 class ForeignRecipientTest(unittest.TestCase):
     def test_indicated_client_keeps_the_other_phone_and_nothing_is_sent(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -68,18 +74,8 @@ class ForeignRecipientTest(unittest.TestCase):
             self.assertEqual(pointed["cliente_id"], ana)
             self.assertEqual(owner["cliente_id"], bruno)
 
-            self.assertTrue(controller.approve(mail))
-            self.assertTrue(controller.approve(message))
-
-            def refuse(*_args, **_kwargs):
-                raise AssertionError("entregou")
-
-            self.assertFalse(
-                controller.send_approved_mail(
-                    mail, "smtp.example", 2525, "escritorio@flow.local", "segredo"
-                )
-            )
-            self.assertFalse(controller.send_approved_whatsapp(message, refuse))
+            self.assertFalse(controller.approve(mail, _approval_version(controller, mail)))
+            self.assertFalse(controller.approve(message, _approval_version(controller, message)))
 
             states = {
                 row["id"]: row["estado"]

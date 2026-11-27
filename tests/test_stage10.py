@@ -44,6 +44,12 @@ def _entry(connection, client_id, contact_id: int, text: str, when: str, state: 
     ).lastrowid
 
 
+def _approve(controller: Controller, draft_id: int) -> bool:
+    controller._reload()
+    row = next(row for row in controller._drafts._rows if row["draftId"] == draft_id)
+    return controller.approve(draft_id, str(row["approvalVersion"]))
+
+
 class DayCycleTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -202,7 +208,7 @@ class DayCycleTest(unittest.TestCase):
 
         self.assertTrue(self.controller.indicate(filing, bruno, process))
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 1)
-        self.assertTrue(self.controller.approve(follow["id"]))
+        self.assertTrue(_approve(self.controller, follow["id"]))
         self.calls.clear()
         again = self.controller.run_cycle(morning, self._dispatch)
         self.assertFalse(again.ran)

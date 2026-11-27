@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QCoreApplication, QObject, Qt, QTimer, Signal, Slot
 
 from flow.classify import Classifier, ReadTool
 from flow.cycle import DayCycle
@@ -23,9 +26,24 @@ from flow.store import database_file, open_database
 _STOPPED = "Leitura e envio de WhatsApp estão parados."
 
 
+def _approval_fingerprint(row) -> str:
+    values = (
+        str(row["text"] or ""),
+        str(row["address"] or ""),
+        str(row["channel"] or ""),
+        str(row["entry_client"] or "sem cliente"),
+        str(row["contact_client"] or "sem cliente"),
+        row["entry_client_id"],
+        row["contact_client_id"],
+    )
+    payload = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class Controller(QObject):
     backgroundDone = Signal()
     surfaceChanged = Signal()
+    searchChoiceReady = Signal(int, object)
 
     def __init__(self, data_root: Path | None = None) -> None:
         super().__init__()
@@ -38,12 +56,27 @@ class Controller(QObject):
         self._qr_clock: QTimer | None = None
         self._pairing = False
         self._cycle_thread: threading.Thread | None = None
+        self._search_generation = 0
         self.backgroundDone.connect(self._reload)
-        self._drafts = RecordModel(["draftId", "text", "address", "channel", "state"])
+        self.searchChoiceReady.connect(self._show_search_choice, Qt.ConnectionType.QueuedConnection)
+        self._drafts = RecordModel(
+            [
+                "draftId",
+                "text",
+                "address",
+                "channel",
+                "entryClient",
+                "contactClient",
+                "clientsMatch",
+                "approvalVersion",
+                "state",
+            ]
+        )
         self._pendings = RecordModel(["entryId", "text", "reason"])
         self._clients = RecordModel(["clientId", "name"])
         self._processes = RecordModel(["processId", "label"])
-        for model in (self._drafts, self._pendings, self._clients, self._processes):
+        self._search_candidates = RecordModel(["clientId", "name"])
+        for model in (self._drafts, self._pendings, self._clients, self._processes, self._search_candidates):
             model.setParent(self)
         self._reload()
         self.selectClient(0)
@@ -95,22 +128,35 @@ class Controller(QObject):
         """Coleta antes da fila. Um lado que falha não impede o outro."""
         db = self._db if connection is None else connection
         ok = True
+        errors: list[str] = []
         account = load_mail_account(self._data_dir)
         if account is not None:
             try:
-                ImapReader(db, self._data_dir).ingest(
+                result = ImapReader(db, self._data_dir).ingest(
                     account.imap_host,
                     account.imap_port,
                     account.user,
                     account.password,
                 )
-            except Exception:
+                if getattr(result, "failures", []):
+                    ok = False
+                    errors.append(f"E-mail: {len(result.failures)} mensagem(ns) não gravada(s).")
+            except Exception as exc:
                 ok = False
+                errors.append(f"E-mail: falha na coleta ({exc}).")
         try:
             if session_ready(whatsapp_session(self._data_dir)):
-                WhatsAppReader(db, self._data_dir).ingest()
-        except Exception:
+                result = WhatsAppReader(db, self._data_dir).ingest()
+                if getattr(result, "failures", []):
+                    ok = False
+                    errors.append(f"WhatsApp: {len(result.failures)} mensagem(ns) não gravada(s).")
+                if getattr(result, "warnings", []):
+                    errors.append("WhatsApp: " + "; ".join(dict.fromkeys(result.warnings)))
+        except Exception as exc:
             ok = False
+            errors.append(f"WhatsApp: falha na coleta ({exc}).")
+        if errors:
+            publish_notice(self._data_dir, " ".join(errors))
         return ok
 
     def _dispatch_approved(self, draft_id: int, channel: str, connection=None) -> bool:
@@ -172,6 +218,10 @@ class Controller(QObject):
     def processes(self) -> QObject:
         return self._processes
 
+    @Property(QObject, constant=True)
+    def searchCandidates(self) -> QObject:
+        return self._search_candidates
+
     @Property(str, notify=surfaceChanged)
     def whatsappNotice(self) -> str:
         if self._session_ready:
@@ -186,48 +236,76 @@ class Controller(QObject):
     def notice(self) -> str:
         return self._notice
 
-    @Slot(int, result=bool)
-    def approve(self, draft_id: int) -> bool:
-        """Marca o rascunho como aprovado e congela texto, destino e clientes."""
-        row = self._db.execute(
-            """
-            SELECT rascunho.texto, contato.valor, contato.tipo,
-                   entrada.cliente_id AS entrada_cliente,
-                   contato.cliente_id AS contato_cliente
-            FROM rascunho
-            JOIN entrada ON entrada.id = rascunho.entrada_id
-            JOIN contato ON contato.id = entrada.contato_id
-            WHERE rascunho.id = ? AND rascunho.estado = 'aguardando'
-            """,
-            (draft_id,),
-        ).fetchone()
-        if row is None:
-            self._db.rollback()
-            return False
-        changed = self._db.execute(
-            """
-            UPDATE rascunho
-            SET estado = 'aprovado',
-                texto_aprovado = ?,
-                destino_aprovado = ?,
-                canal_aprovado = ?,
-                cliente_entrada_aprovado = ?,
-                cliente_contato_aprovado = ?
-            WHERE id = ? AND estado = 'aguardando'
-            """,
-            (
-                row["texto"],
-                row["valor"],
-                row["tipo"],
-                row["entrada_cliente"],
-                row["contato_cliente"],
-                draft_id,
-            ),
-        )
-        if changed.rowcount != 1:
-            self._db.rollback()
-            return False
-        self._db.commit()
+    @Slot(int, str, result=bool)
+    def approve(self, draft_id: int, displayed_version: str) -> bool:
+        """Aprova somente a mesma versão íntegra e visível na fila."""
+        try:
+            self._db.execute("BEGIN IMMEDIATE")
+            row = self._db.execute(
+                """
+                SELECT rascunho.texto AS text, contato.valor AS address,
+                       contato.tipo AS channel,
+                       entrada.cliente_id AS entry_client_id,
+                       contato.cliente_id AS contact_client_id,
+                       entry_client.nome AS entry_client,
+                       contact_client.nome AS contact_client
+                FROM rascunho
+                JOIN entrada ON entrada.id = rascunho.entrada_id
+                JOIN contato ON contato.id = entrada.contato_id
+                LEFT JOIN cliente AS entry_client ON entry_client.id = entrada.cliente_id
+                LEFT JOIN cliente AS contact_client ON contact_client.id = contato.cliente_id
+                WHERE rascunho.id = ? AND rascunho.estado = 'aguardando'
+                """,
+                (draft_id,),
+            ).fetchone()
+            if row is None:
+                self._db.rollback()
+                self._reload()
+                return False
+            current_version = _approval_fingerprint(row)
+            if not hmac.compare_digest(current_version, str(displayed_version)):
+                self._db.rollback()
+                publish_notice(self._data_dir, "Os dados do rascunho mudaram; revise a versão atual.")
+                self._reload()
+                return False
+            if (
+                row["entry_client_id"] is None
+                or row["entry_client_id"] != row["contact_client_id"]
+            ):
+                self._db.rollback()
+                publish_notice(self._data_dir, "Os clientes da entrada e do contato divergem.")
+                self._reload()
+                return False
+            changed = self._db.execute(
+                """
+                UPDATE rascunho
+                SET estado = 'aprovado',
+                    texto_aprovado = ?,
+                    destino_aprovado = ?,
+                    canal_aprovado = ?,
+                    cliente_entrada_aprovado = ?,
+                    cliente_contato_aprovado = ?
+                WHERE id = ? AND estado = 'aguardando'
+                """,
+                (
+                    row["text"],
+                    row["address"],
+                    row["channel"],
+                    row["entry_client_id"],
+                    row["contact_client_id"],
+                    draft_id,
+                ),
+            )
+            if changed.rowcount != 1:
+                self._db.rollback()
+                self._reload()
+                return False
+            self._db.commit()
+        except Exception:
+            if self._db.in_transaction:
+                self._db.rollback()
+            raise
+        clear_notice(self._data_dir)
         self._reload()
         return True
 
@@ -291,6 +369,8 @@ class Controller(QObject):
         """Lê a caixa IMAP. Não classifica e não envia."""
         entry_ids = ImapReader(self._db, self._data_dir).ingest(host, port, user, password)
         self._db.commit()
+        if entry_ids.failures:
+            publish_notice(self._data_dir, f"E-mail: {len(entry_ids.failures)} mensagem(ns) não gravada(s).")
         self._reload()
         return entry_ids
 
@@ -313,6 +393,10 @@ class Controller(QObject):
         entry_ids = WhatsAppReader(self._db, self._data_dir, runner).ingest()
         self._db.commit()
         commit_cursor(self._db)
+        if entry_ids.failures:
+            publish_notice(self._data_dir, f"WhatsApp: {len(entry_ids.failures)} mensagem(ns) não gravada(s).")
+        elif entry_ids.warnings:
+            publish_notice(self._data_dir, "WhatsApp: " + "; ".join(dict.fromkeys(entry_ids.warnings)))
         self._reload()
         return entry_ids
 
@@ -376,39 +460,81 @@ class Controller(QObject):
             query=query,
         )
 
+    @Slot()
+    def clearSearchCandidates(self) -> None:
+        self._search_generation += 1
+        self._search_candidates.replace([])
+
+    @Slot(str, int, result=int)
+    def selectSearchCandidate(self, phrase: str, client_id: int) -> int:
+        return self.search(phrase, client_id=client_id)
+
+    @Slot(int, object)
+    def _show_search_choice(self, generation: int, candidates) -> None:
+        if generation != self._search_generation:
+            return
+        self._search_candidates.replace(
+            [{"clientId": candidate.client_id, "name": candidate.name} for candidate in candidates]
+        )
+
     @Slot(str, result=int)
-    def search(self, phrase: str, transport=None) -> int:
+    def search(self, phrase: str, transport=None, *, client_id: int = 0) -> int:
         """Busca trechos do cliente citado e grava o rascunho. Não envia."""
+        self.clearSearchCandidates()
+        generation = self._search_generation
         key = load_model_key(self._data_dir)
         if transport is not None:
             try:
                 hit = Harness(
                     self._db,
                     CloudLLM(self._db, transport=transport, api_key=key),
-                ).search(phrase)
+                ).search(phrase, client_id=client_id)
             except Exception as exc:
                 publish_notice(self._data_dir, str(exc))
                 self._reload()
                 return 0
+            candidates = getattr(hit, "candidates", None)
+            if candidates is not None:
+                publish_notice(self._data_dir, "cliente ambíguo")
+                self._reload()
+                self._show_search_choice(generation, candidates)
+                return 0
             clear_notice(self._data_dir)
             self._reload()
             return hit.draft_id
-        threading.Thread(target=self._search_away, args=(phrase,), daemon=True).start()
+        if not client_id:
+            try:
+                candidates = Harness(self._db, CloudLLM(self._db, api_key=key)).candidates(phrase)
+            except Exception:
+                # Deixe a busca em segundo plano relatar o erro normalmente.
+                pass
+            else:
+                if len(candidates) > 1:
+                    publish_notice(self._data_dir, "cliente ambíguo")
+                    self._reload()
+                    self._show_search_choice(generation, candidates)
+                    return 0
+        threading.Thread(
+            target=self._search_away, args=(phrase, client_id, generation), daemon=True
+        ).start()
         return 0
 
-    def _search_away(self, phrase: str) -> None:
+    def _search_away(self, phrase: str, client_id: int, generation: int) -> None:
         db = open_database(self._data_dir)
         try:
             try:
-                Harness(
+                hit = Harness(
                     db,
                     CloudLLM(db, api_key=load_model_key(self._data_dir)),
-                ).search(phrase)
+                ).search(phrase, client_id=client_id)
             except Exception as exc:
                 db.rollback()
                 publish_notice(self._data_dir, str(exc))
             else:
                 clear_notice(self._data_dir)
+                candidates = getattr(hit, "candidates", None)
+                if candidates is not None:
+                    self.searchChoiceReady.emit(generation, candidates)
         finally:
             db.close()
             self.backgroundDone.emit()
@@ -443,31 +569,60 @@ class Controller(QObject):
     def _reload(self) -> None:
         self._notice = read_notice(self._data_dir)
         self.surfaceChanged.emit()
-        self._drafts.replace(
-            [
+        drafts = []
+        rows = self._db.execute(
+            """
+            SELECT rascunho.id,
+                   CASE WHEN rascunho.estado = 'em curso'
+                             AND rascunho.texto_aprovado IS NOT NULL
+                        THEN rascunho.texto_aprovado ELSE rascunho.texto END AS text,
+                   rascunho.estado,
+                   CASE WHEN rascunho.estado = 'em curso'
+                             AND rascunho.destino_aprovado IS NOT NULL
+                        THEN rascunho.destino_aprovado ELSE contato.valor END AS address,
+                   CASE WHEN rascunho.estado = 'em curso'
+                             AND rascunho.canal_aprovado IS NOT NULL
+                        THEN rascunho.canal_aprovado ELSE contato.tipo END AS channel,
+                   COALESCE(rascunho.cliente_entrada_aprovado, entrada.cliente_id)
+                       AS entry_client_id,
+                   COALESCE(rascunho.cliente_contato_aprovado, contato.cliente_id)
+                       AS contact_client_id,
+                   COALESCE(entry_snapshot.nome, entry_live.nome, 'sem cliente')
+                       AS entry_client,
+                   COALESCE(contact_snapshot.nome, contact_live.nome, 'sem cliente')
+                       AS contact_client
+            FROM rascunho
+            JOIN entrada ON entrada.id = rascunho.entrada_id
+            JOIN contato ON contato.id = entrada.contato_id
+            LEFT JOIN cliente AS entry_live ON entry_live.id = entrada.cliente_id
+            LEFT JOIN cliente AS contact_live ON contact_live.id = contato.cliente_id
+            LEFT JOIN cliente AS entry_snapshot
+                ON entry_snapshot.id = rascunho.cliente_entrada_aprovado
+            LEFT JOIN cliente AS contact_snapshot
+                ON contact_snapshot.id = rascunho.cliente_contato_aprovado
+            WHERE rascunho.estado IN ('aguardando', 'em curso')
+            ORDER BY rascunho.id
+            """
+        )
+        for row in rows:
+            draft = dict(row)
+            drafts.append(
                 {
                     "draftId": row["id"],
-                    "text": row["texto"],
-                    "address": row["valor"],
-                    "channel": row["tipo"],
+                    "text": row["text"],
+                    "address": row["address"],
+                    "channel": row["channel"],
+                    "entryClient": row["entry_client"],
+                    "contactClient": row["contact_client"],
+                    "clientsMatch": (
+                        row["entry_client_id"] is not None
+                        and row["entry_client_id"] == row["contact_client_id"]
+                    ),
+                    "approvalVersion": _approval_fingerprint(draft),
                     "state": row["estado"],
                 }
-                for row in self._db.execute(
-                    """
-                    SELECT rascunho.id,
-                           COALESCE(rascunho.texto_aprovado, rascunho.texto) AS texto,
-                           rascunho.estado,
-                           COALESCE(rascunho.destino_aprovado, contato.valor) AS valor,
-                           COALESCE(rascunho.canal_aprovado, contato.tipo) AS tipo
-                    FROM rascunho
-                    JOIN entrada ON entrada.id = rascunho.entrada_id
-                    JOIN contato ON contato.id = entrada.contato_id
-                    WHERE rascunho.estado IN ('aguardando', 'em curso')
-                    ORDER BY rascunho.id
-                    """
-                )
-            ]
-        )
+            )
+        self._drafts.replace(drafts)
         self._pendings.replace(
             [
                 {

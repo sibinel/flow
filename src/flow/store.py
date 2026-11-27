@@ -84,6 +84,11 @@ CREATE TABLE IF NOT EXISTS trecho (
     texto TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS store_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS trecho_fts USING fts5(
     texto,
     content='trecho',
@@ -148,20 +153,59 @@ def database_file(data_dir: Path) -> Path:
     return data_dir / "flow.sqlite"
 
 
+class FlowConnection(sqlite3.Connection):
+    def track_documents(self, docs: Path) -> None:
+        if not hasattr(self, "_document_dirs"):
+            self._document_dirs = set()
+        self._document_dirs.add(docs)
+
+    def _recover_documents(self) -> None:
+        from flow.paths import recover_documents
+
+        dirs = getattr(self, "_document_dirs", set())
+        self._document_dirs = set()
+        for docs in dirs:
+            try:
+                recover_documents(self, docs)
+            except (OSError, sqlite3.Error):
+                self._document_dirs.add(docs)
+
+    def commit(self) -> None:
+        super().commit()
+        self._recover_documents()
+
+    def rollback(self) -> None:
+        super().rollback()
+        self._recover_documents()
+
+    def close(self) -> None:
+        if getattr(self, "_flow_closed", False):
+            return
+        if self.in_transaction:
+            self.rollback()
+        else:
+            self._recover_documents()
+        super().close()
+        self._flow_closed = True
+
+
 def open_database(data_dir: Path) -> sqlite3.Connection:
     """Cria o arquivo e o esquema se faltarem. Não apaga linhas existentes."""
     path = database_file(data_dir)
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, factory=FlowConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
     _migrate(connection)
     connection.execute("PRAGMA foreign_keys = ON")
+    from flow.paths import recover_documents
+
+    recover_documents(connection, data_dir / "documentos")
     return connection
 
 
-def _freeze_approved(connection: sqlite3.Connection) -> None:
-    """Copia texto, destino e clientes nos rascunhos que já estavam aprovados."""
+def _ensure_approval_columns(connection: sqlite3.Connection) -> None:
+    """Acrescenta os campos de cópia aprovada sem inferir aprovações passadas."""
     columns = {row[1] for row in connection.execute("PRAGMA table_info(rascunho)")}
     fields = {
         "texto_aprovado": "TEXT",
@@ -173,37 +217,38 @@ def _freeze_approved(connection: sqlite3.Connection) -> None:
     for name, kind in fields.items():
         if name not in columns:
             connection.execute(f"ALTER TABLE rascunho ADD COLUMN {name} {kind}")
-    connection.execute(
-        """
-        UPDATE rascunho
-        SET texto_aprovado = texto,
-            destino_aprovado = (
-                SELECT contato.valor
-                FROM entrada
-                JOIN contato ON contato.id = entrada.contato_id
-                WHERE entrada.id = rascunho.entrada_id
-            ),
-            canal_aprovado = (
-                SELECT contato.tipo
-                FROM entrada
-                JOIN contato ON contato.id = entrada.contato_id
-                WHERE entrada.id = rascunho.entrada_id
-            ),
-            cliente_entrada_aprovado = (
-                SELECT entrada.cliente_id
-                FROM entrada
-                WHERE entrada.id = rascunho.entrada_id
-            ),
-            cliente_contato_aprovado = (
-                SELECT contato.cliente_id
-                FROM entrada
-                JOIN contato ON contato.id = entrada.contato_id
-                WHERE entrada.id = rascunho.entrada_id
+
+
+def _reset_legacy_approvals(connection: sqlite3.Connection) -> None:
+    """Uma vez, exige revisão humana para todo aprovado anterior à cópia confiável."""
+    marker = "legacy_approved_reset_v1"
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        found = connection.execute(
+            "SELECT 1 FROM store_meta WHERE key = ?",
+            (marker,),
+        ).fetchone()
+        if found is None:
+            connection.execute(
+                """
+                UPDATE rascunho
+                SET estado = 'aguardando',
+                    texto_aprovado = NULL,
+                    destino_aprovado = NULL,
+                    canal_aprovado = NULL,
+                    cliente_entrada_aprovado = NULL,
+                    cliente_contato_aprovado = NULL
+                WHERE estado = 'aprovado'
+                """
             )
-        WHERE estado IN ('aprovado', 'em curso')
-          AND texto_aprovado IS NULL
-        """
-    )
+            connection.execute(
+                "INSERT INTO store_meta (key, value) VALUES (?, 'done')",
+                (marker,),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def _migrate(connection: sqlite3.Connection) -> None:
@@ -302,8 +347,9 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute("DROP TABLE rascunho")
         connection.execute("ALTER TABLE rascunho_migrado RENAME TO rascunho")
         connection.execute("PRAGMA foreign_keys = ON")
-    _freeze_approved(connection)
+    _ensure_approval_columns(connection)
     connection.commit()
+    _reset_legacy_approvals(connection)
 
 
 _DEMO_CLIENTS = (

@@ -13,7 +13,7 @@ from email import policy
 from email.utils import parseaddr
 from pathlib import Path
 
-from flow.incoming import keep_each, open_entry
+from flow.incoming import IngestResult, keep_each, open_entry
 from flow.paths import store_document
 
 
@@ -27,7 +27,7 @@ class ImapReader:
     def tool_names(self) -> tuple[str, ...]:
         return (self.name,)
 
-    def ingest(self, host: str, port: int, user: str, password: str) -> list[int]:
+    def ingest(self, host: str, port: int, user: str, password: str) -> IngestResult:
         """Lê a caixa e grava entrada e documento. Não envia."""
         self._docs.mkdir(parents=True, exist_ok=True)
         self._account = user
@@ -97,6 +97,8 @@ def _parts(message) -> tuple[str, list[tuple[str, bytes]]]:
     if not message.is_multipart():
         return _single(message)
     for part in message.walk():
+        if part.is_multipart():
+            continue
         disposition = part.get_content_disposition()
         if disposition == "attachment" or part.get_filename():
             name = Path(part.get_filename() or "anexo").name

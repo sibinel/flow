@@ -14,6 +14,13 @@ from flow.paths import package_dir, whatsapp_session
 from flow.store import open_database
 
 
+def _approve(controller: Controller, draft_id: int) -> None:
+    controller._reload()
+    row = next(row for row in controller._drafts._rows if row["draftId"] == draft_id)
+    if not controller.approve(draft_id, str(row["approvalVersion"])):
+        raise AssertionError("approval failed")
+
+
 def _approved(controller: Controller) -> int:
     db = open_database(controller.database_path.parent)
     client = db.execute(
@@ -34,12 +41,13 @@ def _approved(controller: Controller) -> int:
     draft = db.execute(
         """
         INSERT INTO rascunho (entrada_id, texto, estado)
-        VALUES (?, 'Ana, confirmo.', 'aprovado')
+        VALUES (?, 'Ana, confirmo.', 'aguardando')
         """,
         (entry,),
     ).lastrowid
     db.commit()
     db.close()
+    _approve(controller, int(draft))
     return int(draft)
 
 
@@ -145,11 +153,12 @@ class CertainDeliveryFailureTest(unittest.TestCase):
                 (client, contact),
             ).lastrowid
             draft = db.execute(
-                "INSERT INTO rascunho (entrada_id, texto, estado) VALUES (?, 'Ana, ok.', 'aprovado')",
+                "INSERT INTO rascunho (entrada_id, texto, estado) VALUES (?, 'Ana, ok.', 'aguardando')",
                 (entry,),
             ).lastrowid
             db.commit()
             db.close()
+            _approve(controller, int(draft))
             session = whatsapp_session(root)
             session.mkdir(parents=True)
             (session / "creds.json").write_text(

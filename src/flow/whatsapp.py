@@ -9,22 +9,23 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
-from flow.incoming import keep_each, open_entry, scoped_message_id
+from flow.incoming import IngestResult, already_stored, keep_each, open_entry, scoped_message_id
 from flow.paths import package_dir, store_document, whatsapp_session
 from flow.send import (
     SendTool,
-    claim_draft,
-    frozen_delivery,
-    hold_draft,
     record_delivery,
+    reserve_delivery,
     release_draft,
-    same_client,
 )
 
 
@@ -33,10 +34,22 @@ _cursors: dict[int, tuple] = {}
 
 def commit_cursor(connection: sqlite3.Connection) -> None:
     """Avança o cursor só depois que o banco guardou a mensagem."""
+    if connection.in_transaction:
+        raise RuntimeError("cursor exige commit da coleta")
     plan = _cursors.pop(id(connection), None)
     if plan is None:
         return
     session, messages, confirmed = plan
+    confirmed = [
+        item for item in confirmed
+        if already_stored(
+            connection,
+            "whatsapp",
+            "whatsapp",
+            scoped_message_id("whatsapp", str(item.get("from") or ""), str(item.get("id") or "")),
+            str(item.get("from") or ""),
+        )
+    ]
     _advance_cursor(session, messages, confirmed)
 
 
@@ -53,6 +66,16 @@ def _load_cursor(session: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _time(value) -> float | None:
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.timestamp()
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
+
+
 def _advance_cursor(session: Path, messages: list, confirmed: list) -> None:
     done = {id(item) for item in confirmed}
     cursor = _load_cursor(session)
@@ -61,7 +84,7 @@ def _advance_cursor(session: Path, messages: list, confirmed: list) -> None:
         chat = str(message.get("from") or "")
         by_chat.setdefault(chat, []).append(message)
     for chat, batch in by_chat.items():
-        batch.sort(key=lambda item: str(item.get("received_at") or ""))
+        batch.sort(key=lambda item: _time(item.get("received_at")) or float("-inf"))
         mark = cursor.get(chat)
         advanced = None
         if isinstance(mark, dict) and mark.get("id"):
@@ -70,16 +93,25 @@ def _advance_cursor(session: Path, messages: list, confirmed: list) -> None:
         for message in batch:
             if blocked:
                 continue
-            if str(message.get("media_note") or "").strip():
-                blocked = True
-                continue
             if id(message) not in done:
                 blocked = True
                 continue
-            advanced = {"id": message.get("id"), "time": message.get("received_at")}
+            stamp = _time(message.get("received_at"))
+            if stamp is None or not message.get("id"):
+                blocked = True
+                continue
+            previous = _time(advanced.get("time")) if advanced else None
+            if previous is None or stamp > previous:
+                advanced = {"id": message.get("id"), "time": message.get("received_at")}
         if advanced:
             cursor[chat] = advanced
-    (session / "cursor.json").write_text(json.dumps(cursor), encoding="utf-8")
+    path = session / "cursor.json"
+    temporary = session / f".cursor-{uuid.uuid4().hex}.tmp"
+    try:
+        temporary.write_text(json.dumps(cursor), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class SessionRequired(RuntimeError):
@@ -109,19 +141,25 @@ def pair(data_dir: Path, runner=None) -> dict:
 class WhatsAppReader:
     name = "leitura"
 
-    def __init__(self, connection: sqlite3.Connection, data_dir: Path, runner=None) -> None:
+    def __init__(
+        self, connection: sqlite3.Connection, data_dir: Path, runner=None,
+        overlap_seconds: int = 7 * 24 * 60 * 60,
+    ) -> None:
+        if overlap_seconds < 0:
+            raise ValueError("a janela de sobreposição não pode ser negativa")
         self._db = connection
         self._data_dir = data_dir
         self._docs = data_dir / "documentos"
         self._runner = runner or invoke
+        self._overlap_seconds = int(overlap_seconds)
 
     def tool_names(self) -> tuple[str, ...]:
         return (self.name,)
 
-    def ingest(self) -> list[int]:
+    def ingest(self) -> IngestResult:
         """Lê as mensagens e grava entrada e documento. Não envia."""
         session = _require_session(self._data_dir)
-        result = self._runner(session, "read", {})
+        result = self._runner(session, "read", {"overlap_seconds": self._overlap_seconds})
         _refuse_qr(result)
         messages = list(result.get("messages") or [])
         confirmed: list[dict] = []
@@ -133,6 +171,10 @@ class WhatsAppReader:
             return entry_id
 
         saved = keep_each(self._db, messages, save)
+        saved.warnings.extend(str(item) for item in result.get("warnings", []) if item)
+        saved.warnings.extend(
+            str(message["media_note"]) for message in messages if message.get("media_note")
+        )
         _cursors[id(self._db)] = (session, messages, confirmed)
         return saved
 
@@ -150,6 +192,7 @@ class WhatsAppReader:
         pending = self._pending_media(stored_id, chat)
         if pending is not None:
             if not attachments:
+                self._durable = True
                 return None
             self._store_files(pending, attachments)
             self._durable = True
@@ -233,34 +276,22 @@ class WhatsAppSender:
 
     def send(self, draft_id: int) -> bool:
         """Entrega o rascunho aprovado. Grava em curso antes de sair."""
-        if _already_sent(self._db, draft_id):
-            return False
         row = self._db.execute(
-            """
-            SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor,
-                   rascunho.texto_aprovado, rascunho.destino_aprovado,
-                   rascunho.canal_aprovado, rascunho.cliente_entrada_aprovado,
-                   rascunho.cliente_contato_aprovado,
-                   entrada.cliente_id AS entrada_cliente,
-                   contato.cliente_id AS contato_cliente
-            FROM rascunho
-            JOIN entrada ON entrada.id = rascunho.entrada_id
-            JOIN contato ON contato.id = entrada.contato_id
-            WHERE rascunho.id = ?
-            """,
+            "SELECT estado FROM rascunho WHERE id = ?",
             (draft_id,),
         ).fetchone()
         if row is None or row["estado"] != "aprovado":
             return False
-        text, recipient, channel, entry_client, contact_client = frozen_delivery(row)
-        if channel != "whatsapp":
-            return False
-        if not same_client(entry_client, contact_client):
-            hold_draft(self._db, draft_id)
-            return False
         session = _require_session(self._data_dir)
-        if not claim_draft(self._db, draft_id):
+        delivery = reserve_delivery(
+            self._db,
+            draft_id,
+            "whatsapp",
+            _single_whatsapp_recipient,
+        )
+        if delivery is None:
             return False
+        text, recipient = delivery
         self._tool = SendTool()
         outcome = self._runner(session, "send", {"to": recipient, "text": text})
         if _not_handed(outcome):
@@ -289,12 +320,11 @@ def _was_sent(outcome) -> bool:
     return isinstance(outcome, dict) and outcome.get("sent") is True
 
 
-def _already_sent(connection: sqlite3.Connection, draft_id: int) -> bool:
-    found = connection.execute(
-        "SELECT 1 FROM envio WHERE rascunho_id = ?",
-        (draft_id,),
-    ).fetchone()
-    return found is not None
+def _single_whatsapp_recipient(recipient: str) -> bool:
+    if not re.fullmatch(r"\+?[0-9][0-9 ()-]*", recipient.strip()):
+        return False
+    digits = re.sub(r"\D", "", recipient)
+    return 8 <= len(digits) <= 15
 
 
 def invoke(session: Path, op: str, payload: dict | None = None) -> dict:

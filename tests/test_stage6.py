@@ -18,6 +18,12 @@ from flow.send import SmtpSender
 from flow.store import open_database
 
 
+def _approve(controller: Controller, draft_id: int) -> bool:
+    controller._reload()
+    row = next(row for row in controller._drafts._rows if row["draftId"] == draft_id)
+    return controller.approve(draft_id, str(row["approvalVersion"]))
+
+
 class FakeSmtp:
     def __init__(self) -> None:
         self.messages: list[bytes] = []
@@ -115,7 +121,7 @@ class SmtpSenderTest(unittest.TestCase):
             self.assertEqual(server.commands, [])
             self.assertEqual(self.db.execute("SELECT COUNT(*) FROM envio").fetchone()[0], 0)
 
-            self.assertTrue(self.controller.approve(draft))
+            self.assertTrue(_approve(self.controller, draft))
             self.assertEqual(Classifier(ReadTool(self.db)).tool_names(), ("leitura",))
             self.assertNotIn("envio", Classifier(ReadTool(self.db)).tool_names())
 
@@ -170,7 +176,7 @@ class SmtpSenderTest(unittest.TestCase):
             (entry,),
         ).lastrowid
         self.db.commit()
-        self.assertTrue(self.controller.approve(draft))
+        self.assertTrue(_approve(self.controller, draft))
         trace: list[tuple] = []
 
         class SecureSmtp:
@@ -244,11 +250,12 @@ class SmtpSenderTest(unittest.TestCase):
         draft = self.db.execute(
             """
             INSERT INTO rascunho (entrada_id, texto, estado)
-            VALUES (?, 'Ana, confirmo.', 'aprovado')
+            VALUES (?, 'Ana, confirmo.', 'aguardando')
             """,
             (entry,),
         ).lastrowid
         self.db.commit()
+        self.assertTrue(_approve(self.controller, draft))
         server = FakeSmtp()
         sender = SmtpSender(self.controller._db)
 

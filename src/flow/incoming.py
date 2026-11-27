@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 
-from flow.paths import begin_files, end_files
+from flow.paths import begin_files, cleanup_attempt, end_files
 from flow.when import stored_received
 
 
@@ -136,25 +137,51 @@ def open_entry(
     return saved
 
 
-def keep_each(connection: sqlite3.Connection, items, save) -> list[int]:
-    """Uma mensagem que falha fica de fora. As outras permanecem na transação."""
-    saved: list[int] = []
-    for item in items:
+@dataclass(frozen=True)
+class PersistenceFailure:
+    index: int
+    error: str
+
+
+class IngestResult(list[int]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.duplicates = 0
+        self.failures: list[PersistenceFailure] = []
+        self.warnings: list[str] = []
+
+    @property
+    def saved(self) -> list[int]:
+        return list(self)
+
+
+def keep_each(connection: sqlite3.Connection, items, save) -> IngestResult:
+    """Mantém sucessos e comunica falhas sem confirmar a transação externa."""
+    saved = IngestResult()
+    if not connection.in_transaction:
+        connection.execute("BEGIN")
+    for index, item in enumerate(items):
         connection.execute("SAVEPOINT mensagem")
         files = begin_files()
         try:
             entry_id = save(item)
-        except Exception:
+        except Exception as exc:
             connection.execute("ROLLBACK TO SAVEPOINT mensagem")
             connection.execute("RELEASE SAVEPOINT mensagem")
-            for path in files:
-                path.unlink(missing_ok=True)
-            end_files()
+            try:
+                cleanup_attempt(connection, files)
+            except OSError:
+                pass
+            finally:
+                end_files()
+            saved.failures.append(PersistenceFailure(index, str(exc)))
             continue
         connection.execute("RELEASE SAVEPOINT mensagem")
         end_files()
         if entry_id is not None:
             saved.append(int(entry_id))
+        else:
+            saved.duplicates += 1
     return saved
 
 

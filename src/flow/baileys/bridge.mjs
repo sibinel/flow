@@ -213,27 +213,86 @@ function loadCursor(folder) {
   }
 }
 
-async function askGap(sock, cursor) {
-  if (typeof sock.fetchMessageHistory !== 'function') return
-  for (const [chat, mark] of Object.entries(cursor)) {
-    const digits = String(chat).replace(/\D/g, '')
-    if (!digits || !mark || !mark.id) continue
-    const seconds = Date.parse(mark.time)
-    if (!Number.isFinite(seconds)) continue
-    try {
-      await sock.fetchMessageHistory(
-        50,
-        { remoteJid: `${digits}@s.whatsapp.net`, id: String(mark.id), fromMe: false },
-        Math.floor(seconds / 1000),
-      )
-    } catch {
-      // a janela ao vivo ainda entrega o que conseguir
+function fetchHistoryPage(sock, key, seconds, timeout) {
+  return new Promise((resolve, reject) => {
+    let requestId
+    let done = false
+    const pending = new Map()
+    const finish = (error, messages) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      sock.ev.off('messaging-history.set', onHistory)
+      if (error) reject(error)
+      else resolve(messages)
     }
+    const onHistory = (event) => {
+      const id = event.peerDataRequestSessionId
+      if (!id) return
+      if (id === requestId) finish(null, event.messages || [])
+      else if (!requestId) pending.set(id, event.messages || [])
+    }
+    const timer = setTimeout(() => finish(new Error('tempo esgotado')), timeout)
+    sock.ev.on('messaging-history.set', onHistory)
+    Promise.resolve().then(() => sock.fetchMessageHistory(50, key, seconds)).then((id) => {
+      if (done) return
+      if (!id) return finish(new Error('ID da solicitação indisponível'))
+      requestId = id
+      if (pending.has(id)) finish(null, pending.get(id))
+    }, (error) => finish(error))
+  })
+}
+
+async function askGap(sock, cursor, overlap, warnings) {
+  const entries = Object.entries(cursor)
+  if (!entries.length) {
+    warnings.push('Histórico inicial pode estar incompleto; a sincronização não garante todas as mensagens.')
+    return
+  }
+  if (typeof sock.fetchMessageHistory !== 'function' || typeof sock.ev.off !== 'function') {
+    warnings.push('Histórico sob demanda indisponível; mensagens anteriores podem estar faltando.')
+    return
+  }
+  const deadline = Date.now() + 8000
+  for (const [chat, mark] of entries) {
+    const digits = String(chat).replace(/\D/g, '')
+    const time = Date.parse(mark?.time)
+    if (!digits || !mark?.id || !Number.isFinite(time)) {
+      warnings.push(`Cursor inválido para ${chat}; histórico não solicitado.`)
+      continue
+    }
+    const boundary = time / 1000 - overlap
+    let seconds = Math.floor(time / 1000)
+    let key = { remoteJid: `${digits}@s.whatsapp.net`, id: String(mark.id), fromMe: false }
+    let covered = false
+    try {
+      for (let page = 0; page < 10; page += 1) {
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) throw new Error('tempo total esgotado')
+        const messages = await fetchHistoryPage(sock, key, seconds, Math.min(remaining, 3000))
+        const candidates = messages.filter((msg) => phoneOf(msg) === `+${digits}` && msg.key?.id)
+          .map((msg) => ({ msg, time: Number(msg.messageTimestamp?.toString?.() ?? msg.messageTimestamp) }))
+          .filter((item) => Number.isFinite(item.time) && item.time > 0)
+          .sort((a, b) => a.time - b.time)
+        const oldest = candidates[0]
+        if (!oldest) throw new Error('página sem mensagens utilizáveis')
+        if (oldest.time <= boundary) {
+          covered = true
+          break
+        }
+        if (oldest.time >= seconds) throw new Error('paginação sem progresso')
+        key = oldest.msg.key
+        seconds = oldest.time
+      }
+      if (!covered) warnings.push(`Histórico de ${chat} pode estar incompleto: limite de páginas atingido.`)
+    } catch (error) {
+      warnings.push(`Histórico de ${chat} pode estar incompleto: ${error?.message || error}.`)
+    }
+    warnings.push(`Histórico de ${chat} não garante recuperação completa; a chave inicial do cursor é aproximada.`)
   }
 }
 
-function applyCursor(folder, messages) {
-  const cursor = loadCursor(folder)
+function applyCursor(cursor, messages, overlap) {
   const byChat = new Map()
   for (const message of messages) {
     const list = byChat.get(message.from) || []
@@ -245,7 +304,9 @@ function applyCursor(folder, messages) {
     list.sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)))
     const mark = cursor[chat]
     for (const message of list) {
-      const after = !mark || String(message.received_at) >= String(mark.time)
+      const time = Date.parse(message.received_at)
+      const markTime = Date.parse(mark?.time)
+      const after = !Number.isFinite(markTime) || !Number.isFinite(time) || time >= markTime - overlap * 1000
       if (after) kept.push(message)
     }
   }
@@ -294,18 +355,26 @@ function isoTime(msg) {
 async function readMessages(folder) {
   const collected = new Map()
   const cursor = loadCursor(folder)
+  const warnings = []
+  let overlap = request.overlap_seconds ?? 604800
+  if (typeof overlap !== 'number' || !Number.isFinite(overlap) || overlap < 0) {
+    warnings.push('overlap_seconds inválido; usado o padrão de 604800 segundos.')
+    overlap = 604800
+  }
   const sock = await connect(folder, false, (socket) => {
     const take = (list) => {
       for (const msg of list || []) {
         const id = msg?.key?.id
-        if (!id || msg.key.fromMe || collected.has(id)) continue
-        collected.set(id, msg)
+        const chat = phoneOf(msg)
+        if (!id || !chat || msg.key.fromMe) continue
+        const key = JSON.stringify([chat, id])
+        if (!collected.has(key)) collected.set(key, msg)
       }
     }
     socket.ev.on('messaging-history.set', ({ messages }) => take(messages))
     socket.ev.on('messages.upsert', ({ messages }) => take(messages))
   })
-  await askGap(sock, cursor)
+  await askGap(sock, cursor, overlap, warnings)
   await new Promise((resolve) => {
     const timer = setTimeout(resolve, 8000)
     sock.ev.on('messaging-history.set', ({ isLatest }) => {
@@ -318,19 +387,22 @@ async function readMessages(folder) {
   for (const msg of collected.values()) {
     const from = phoneOf(msg)
     if (!from) continue
+    const receivedAt = isoTime(msg)
+    if (!applyCursor(cursor, [{ from, received_at: receivedAt }], overlap).length) continue
     const text = textOf(msg)
     const found = await attachmentOf(msg, sock)
+    if (found.note) warnings.push(`${from} (${msg.key.id}): ${found.note}`)
     messages.push({
       id: msg.key.id,
       from,
       text,
-      received_at: isoTime(msg),
+      received_at: receivedAt,
       attachments: found.file ? [found.file] : [],
       media_note: found.note,
     })
   }
   end(sock)
-  return { messages: applyCursor(folder, messages) }
+  return { messages: applyCursor(cursor, messages, overlap), warnings }
 }
 
 async function sendMessage(folder) {

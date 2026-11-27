@@ -31,6 +31,11 @@ class RecordModel(QAbstractListModel):
         return {role: QByteArray(name.encode()) for role, name in self._role_ids.items()}
 
     def replace(self, rows: list[dict[str, object]]) -> None:
+        required = set(self._role_ids.values())
+        for row in rows:
+            missing = required.difference(row)
+            if missing:
+                raise ValueError(f"campos ausentes na fila: {', '.join(sorted(missing))}")
         self.beginResetModel()
         self._rows = rows
         self.endResetModel()

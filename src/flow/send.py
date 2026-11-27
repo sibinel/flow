@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import smtplib
 from datetime import datetime
@@ -28,31 +29,10 @@ class SmtpSender:
 
     def send(self, draft_id: int, host: str, port: int, sender: str, password: str) -> bool:
         """Entrega o rascunho aprovado. Grava em curso antes de sair."""
-        if _already_sent(self._db, draft_id):
+        delivery = reserve_delivery(self._db, draft_id, "email", _single_email_recipient)
+        if delivery is None:
             return False
-        row = self._db.execute(
-            """
-            SELECT rascunho.texto, rascunho.estado, contato.valor, contato.tipo,
-                   rascunho.texto_aprovado, rascunho.destino_aprovado,
-                   rascunho.canal_aprovado, rascunho.cliente_entrada_aprovado,
-                   rascunho.cliente_contato_aprovado,
-                   entrada.cliente_id AS entrada_cliente,
-                   contato.cliente_id AS contato_cliente
-            FROM rascunho
-            JOIN entrada ON entrada.id = rascunho.entrada_id
-            JOIN contato ON contato.id = entrada.contato_id
-            WHERE rascunho.id = ?
-            """,
-            (draft_id,),
-        ).fetchone()
-        if row is None or row["estado"] != "aprovado":
-            return False
-        text, recipient, _channel, entry_client, contact_client = frozen_delivery(row)
-        if not same_client(entry_client, contact_client):
-            hold_draft(self._db, draft_id)
-            return False
-        if not claim_draft(self._db, draft_id):
-            return False
+        text, recipient = delivery
         self._tool = SendTool()
         delivered = _deliver(host, port, sender, recipient, text, password)
         if delivered is False:
@@ -63,19 +43,69 @@ class SmtpSender:
         return True
 
 
-def claim_draft(connection: sqlite3.Connection, draft_id: int) -> bool:
-    """Marca em curso e grava antes da entrega. Se o processo cair, fica assim."""
-    changed = connection.execute(
-        """
-        UPDATE rascunho SET estado = 'em curso'
-        WHERE id = ? AND estado = 'aprovado'
-        """,
-        (draft_id,),
-    )
-    if changed.rowcount != 1:
-        return False
+def reserve_delivery(
+    connection: sqlite3.Connection,
+    draft_id: int,
+    channel: str,
+    valid_recipient,
+) -> tuple[str, str] | None:
+    """Lê a cópia e a reserva sob o mesmo bloqueio de escrita."""
     connection.commit()
-    return True
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if _already_sent(connection, draft_id):
+            connection.rollback()
+            return None
+        row = connection.execute(
+            """
+            SELECT rascunho.estado, rascunho.texto_aprovado,
+                   rascunho.destino_aprovado, rascunho.canal_aprovado,
+                   rascunho.cliente_entrada_aprovado,
+                   rascunho.cliente_contato_aprovado,
+                   entrada.cliente_id AS entrada_cliente,
+                   contato.cliente_id AS contato_cliente,
+                   contato.tipo AS contato_tipo
+            FROM rascunho
+            JOIN entrada ON entrada.id = rascunho.entrada_id
+            JOIN contato ON contato.id = entrada.contato_id
+            WHERE rascunho.id = ?
+            """,
+            (draft_id,),
+        ).fetchone()
+        if row is None or row["estado"] != "aprovado":
+            connection.rollback()
+            return None
+        try:
+            text, recipient, approved_channel, entry_client, contact_client = frozen_delivery(row)
+        except ValueError:
+            connection.rollback()
+            return None
+        if approved_channel != channel:
+            connection.rollback()
+            return None
+        if (
+            row["contato_tipo"] != approved_channel
+            or not same_client(entry_client, contact_client)
+            or entry_client != row["entrada_cliente"]
+            or contact_client != row["contato_cliente"]
+            or not valid_recipient(recipient)
+        ):
+            _return_for_review(connection, draft_id)
+            connection.commit()
+            return None
+        changed = connection.execute(
+            "UPDATE rascunho SET estado = 'em curso' WHERE id = ? AND estado = 'aprovado'",
+            (draft_id,),
+        )
+        if changed.rowcount != 1:
+            connection.rollback()
+            return None
+        connection.commit()
+        return text, recipient
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
 
 
 def release_draft(connection: sqlite3.Connection, draft_id: int) -> None:
@@ -121,10 +151,13 @@ def _deliver(
     host: str, port: int, sender: str, recipient: str, body: str, password: str
 ) -> bool:
     """Falha ao abrir ou entrar devolve falso. Falha depois do envio sobe."""
-    message = EmailMessage()
-    message["From"] = sender
-    message["To"] = recipient
-    message.set_content(body)
+    try:
+        message = EmailMessage()
+        message["From"] = sender
+        message["To"] = recipient
+        message.set_content(body)
+    except Exception:
+        return False
     try:
         smtp = _smtp(host, port)
     except Exception:
@@ -136,31 +169,26 @@ def _deliver(
         _close_smtp(smtp)
         return False
     try:
-        smtp.send_message(message)
+        refused = smtp.send_message(message)
     except Exception:
         _close_smtp(smtp)
         raise
     _close_smtp(smtp)
-    return True
+    return not refused
 
 
 def frozen_delivery(row) -> tuple[str, str, str, int | None, int | None]:
-    """O envio lê a cópia feita na aprovação. Sem ela, usa a linha atual."""
-    if row["texto_aprovado"] is not None:
-        return (
-            row["texto_aprovado"],
-            row["destino_aprovado"] or "",
-            row["canal_aprovado"] or "",
-            row["cliente_entrada_aprovado"],
-            row["cliente_contato_aprovado"],
-        )
-    return (
-        row["texto"],
-        row["valor"],
-        row["tipo"],
-        row["entrada_cliente"],
-        row["contato_cliente"],
+    """Retorna somente a cópia completa criada pela aprovação humana."""
+    fields = (
+        "texto_aprovado",
+        "destino_aprovado",
+        "canal_aprovado",
+        "cliente_entrada_aprovado",
+        "cliente_contato_aprovado",
     )
+    if any(row[field] is None for field in fields):
+        raise ValueError("rascunho sem cópia completa de aprovação")
+    return tuple(row[field] for field in fields)  # type: ignore[return-value]
 
 
 def same_client(entry_client: int | None, contact_client: int | None) -> bool:
@@ -168,8 +196,7 @@ def same_client(entry_client: int | None, contact_client: int | None) -> bool:
     return entry_client is not None and entry_client == contact_client
 
 
-def hold_draft(connection: sqlite3.Connection, draft_id: int) -> None:
-    """Devolve o rascunho para a fila e solta a cópia. Nada foi entregue."""
+def _return_for_review(connection: sqlite3.Connection, draft_id: int) -> None:
     connection.execute(
         """
         UPDATE rascunho
@@ -182,6 +209,12 @@ def hold_draft(connection: sqlite3.Connection, draft_id: int) -> None:
         WHERE id = ? AND estado = 'aprovado'
         """,
         (draft_id,),
+    )
+
+
+def _single_email_recipient(recipient: str) -> bool:
+    return bool(
+        re.fullmatch(r"[^@\s,<>:;]+@[^@\s,<>:;]+", recipient.strip())
     )
 
 

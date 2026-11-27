@@ -20,6 +20,17 @@ class SearchHit:
     snippets: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SearchCandidate:
+    client_id: int
+    name: str
+
+
+@dataclass(frozen=True)
+class SearchChoice:
+    candidates: tuple[SearchCandidate, ...]
+
+
 class Harness:
     def __init__(self, connection: sqlite3.Connection, llm: CloudLLM) -> None:
         self._db = connection
@@ -29,9 +40,22 @@ class Harness:
     def tool_names(self) -> tuple[str, ...]:
         return (self.read.name,)
 
-    def search(self, phrase: str) -> SearchHit:
+    def candidates(self, phrase: str) -> tuple[SearchCandidate, ...]:
+        prefix, _ = _split_phrase(phrase)
+        return _named_clients(self._db, prefix)
+
+    def search(self, phrase: str, client_id: int = 0) -> SearchHit | SearchChoice:
         """Acha o cliente na frase, lê os trechos dele e grava o rascunho."""
-        client_id = _named_client(self._db, phrase)
+        candidates = self.candidates(phrase)
+        if not candidates:
+            raise ValueError("cliente não encontrado na frase")
+        if client_id:
+            if client_id not in {candidate.client_id for candidate in candidates}:
+                raise ValueError("cliente selecionado não corresponde à frase")
+        elif len(candidates) > 1:
+            return SearchChoice(candidates)
+        else:
+            client_id = candidates[0].client_id
         if self.read.load_client(client_id) is None:
             raise ValueError("cliente não existe")
         topic = _topic(phrase)
@@ -62,36 +86,23 @@ class Harness:
         return SearchHit(client_id, int(draft_id), snippets)
 
 
-def _named_client(connection: sqlite3.Connection, phrase: str) -> int:
-    folded = phrase.casefold()
-    best_score = -1
-    found: list[int] = []
+def _named_clients(connection: sqlite3.Connection, prefix: str) -> tuple[SearchCandidate, ...]:
+    folded = prefix.casefold()
+    found = []
     for row in connection.execute("SELECT id, nome FROM cliente ORDER BY id"):
         name = str(row["nome"]).casefold().strip()
         parts = [name, *name.split()] if name else []
-        score = None
         for part in parts:
             if len(part) < 3:
                 continue
             if re.search(rf"(?<!\w){re.escape(part)}(?!\w)", folded) is None:
                 continue
-            score = len(part)
+            found.append(SearchCandidate(int(row["id"]), str(row["nome"])))
             break
-        if score is None:
-            continue
-        if score > best_score:
-            best_score = score
-            found = [int(row["id"])]
-        elif score == best_score:
-            found.append(int(row["id"]))
-    if len(found) != 1:
-        if found:
-            raise ValueError("cliente ambíguo")
-        raise ValueError("cliente não encontrado na frase")
-    return found[0]
+    return tuple(found)
 
 
-def _topic(phrase: str) -> str:
+def _split_phrase(phrase: str) -> tuple[str, str]:
     folded = phrase.casefold()
     index = folded.rfind(_MARKER)
     if index < 0:
@@ -99,4 +110,8 @@ def _topic(phrase: str) -> str:
     topic = phrase[index + len(_MARKER) :].strip()
     if not topic:
         raise ValueError("tema não encontrado na frase")
-    return topic
+    return phrase[:index], topic
+
+
+def _topic(phrase: str) -> str:
+    return _split_phrase(phrase)[1]

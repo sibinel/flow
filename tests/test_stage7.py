@@ -16,6 +16,12 @@ from flow.whatsapp import SessionRequired, WhatsAppReader, WhatsAppSender, sessi
 import flow.whatsapp as whatsapp
 
 
+def _approve(controller: Controller, draft_id: int) -> bool:
+    controller._reload()
+    row = next(row for row in controller._drafts._rows if row["draftId"] == draft_id)
+    return controller.approve(draft_id, str(row["approvalVersion"]))
+
+
 def _pdf() -> str:
     return base64.b64encode(b"%PDF-1.4 procuracao").decode("ascii")
 
@@ -81,7 +87,7 @@ class WhatsAppSessionTest(unittest.TestCase):
         self.assertEqual(held.tool_names(), ())
         self.assertFalse(held.send(self.draft))
         self.assertEqual(held.tool_names(), ())
-        self.assertTrue(self.controller.approve(self.draft))
+        self.assertTrue(_approve(self.controller, self.draft))
         self.assertEqual(Classifier(ReadTool(self.db)).tool_names(), ("leitura",))
         self.assertNotIn("envio", Classifier(ReadTool(self.db)).tool_names())
         with self.assertRaises(SessionRequired):
@@ -219,7 +225,7 @@ class WhatsAppSessionTest(unittest.TestCase):
         self.assertEqual(held.tool_names(), ())
         self.assertNotIn("send", ops)
 
-        self.assertTrue(self.controller.approve(self.draft))
+        self.assertTrue(_approve(self.controller, self.draft))
         self.assertEqual(Classifier(ReadTool(self.db)).tool_names(), ("leitura",))
         self.assertNotIn("envio", Classifier(ReadTool(self.db)).tool_names())
         self.assertTrue(held.send(self.draft))

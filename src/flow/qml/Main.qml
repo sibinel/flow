@@ -63,6 +63,10 @@ ApplicationWindow {
                 implicitHeight: 40
                 leftPadding: 12
                 rightPadding: 12
+                onTextChanged: {
+                    if (controller)
+                        controller.clearSearchCandidates()
+                }
                 background: Rectangle {
                     radius: 8
                     color: "#292524"
@@ -107,6 +111,36 @@ ApplicationWindow {
                 background: Rectangle {
                     radius: 8
                     color: parent.down ? "#44403c" : parent.hovered ? "#57534e" : "#44403c"
+                }
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: searchCandidatesView.count > 0
+            spacing: 6
+
+            Label {
+                text: "Escolha o cliente:"
+                color: "#a8a29e"
+                font.pixelSize: 14
+            }
+            ListView {
+                id: searchCandidatesView
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(count * 40, 160)
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: controller ? controller.searchCandidates : null
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                delegate: Button {
+                    required property int clientId
+                    required property string name
+                    width: searchCandidatesView.width
+                    height: 40
+                    text: name + " (ID: " + clientId + ")"
+                    onClicked: controller.selectSearchCandidate(searchField.text, clientId)
                 }
             }
         }
@@ -202,6 +236,10 @@ ApplicationWindow {
                                 required property string text
                                 required property string address
                                 required property string channel
+                                required property string entryClient
+                                required property string contactClient
+                                required property bool clientsMatch
+                                required property string approvalVersion
                                 required property string state
                                 width: draftsView.width
                                 implicitHeight: Math.max(draftRow.implicitHeight + 20, 64)
@@ -245,6 +283,28 @@ ApplicationWindow {
                                             Layout.fillWidth: true
                                         }
                                         Label {
+                                            text: "Cliente da entrada: " + draftCard.entryClient
+                                            color: "#d6d3d1"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: "Cliente do contato: " + draftCard.contactClient
+                                            color: "#d6d3d1"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            visible: !draftCard.clientsMatch
+                                            text: "Clientes diferentes: aprovação bloqueada."
+                                            color: "#fbbf24"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
                                             visible: draftCard.state === "em curso"
                                             text: "Em curso"
                                             color: "#facc15"
@@ -255,13 +315,14 @@ ApplicationWindow {
                                     }
                                     Button {
                                         visible: draftCard.state === "aguardando"
+                                        enabled: draftCard.clientsMatch
                                         text: "Aprovar"
                                         implicitHeight: 40
                                         leftPadding: 18
                                         rightPadding: 18
                                         font.pixelSize: 14
                                         font.capitalization: Font.MixedCase
-                                        onClicked: controller.approve(draftId)
+                                        onClicked: controller.approve(draftId, approvalVersion)
                                         contentItem: Text {
                                             text: parent.text
                                             font: parent.font
