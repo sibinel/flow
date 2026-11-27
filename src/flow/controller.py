@@ -91,19 +91,27 @@ class Controller(QObject):
             db.close()
             self.backgroundDone.emit()
 
-    def _collect(self, connection=None) -> None:
-        """Coleta antes da fila. Sem conta ou sem sessão, esse lado não corre."""
+    def _collect(self, connection=None) -> bool:
+        """Coleta antes da fila. Um lado que falha não impede o outro."""
         db = self._db if connection is None else connection
+        ok = True
         account = load_mail_account(self._data_dir)
         if account is not None:
-            ImapReader(db, self._data_dir).ingest(
-                account.imap_host,
-                account.imap_port,
-                account.user,
-                account.password,
-            )
-        if session_ready(whatsapp_session(self._data_dir)):
-            WhatsAppReader(db, self._data_dir).ingest()
+            try:
+                ImapReader(db, self._data_dir).ingest(
+                    account.imap_host,
+                    account.imap_port,
+                    account.user,
+                    account.password,
+                )
+            except Exception:
+                ok = False
+        try:
+            if session_ready(whatsapp_session(self._data_dir)):
+                WhatsAppReader(db, self._data_dir).ingest()
+        except Exception:
+            ok = False
+        return ok
 
     def _dispatch_approved(self, draft_id: int, channel: str, connection=None) -> bool:
         db = self._db if connection is None else connection

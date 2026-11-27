@@ -90,12 +90,15 @@ class DayCycle:
         slot_at = self._open_slot(now)
         if slot_at is None or self._done(slot_at):
             return CycleQueue((), (), False, ())
+        collect_ok = True
         if collect is not None:
             try:
-                collect()
+                if collect() is False:
+                    collect_ok = False
                 self._db.commit()
             except Exception:
                 self._db.rollback()
+                collect_ok = False
         try:
             sent = self._execute(slot_at, dispatch)
             drafts, pendings = self._queue(slot_at)
@@ -103,11 +106,12 @@ class DayCycle:
         except Exception:
             self._db.rollback()
             raise
-        save_config(
-            self._data_dir,
-            self.config,
-            slot_at.isoformat(timespec="seconds"),
-        )
+        if collect_ok:
+            save_config(
+                self._data_dir,
+                self.config,
+                slot_at.isoformat(timespec="seconds"),
+            )
         return CycleQueue(drafts, pendings, True, tuple(sent))
 
     def _open_slot(self, now: datetime) -> datetime | None:
@@ -206,6 +210,10 @@ class DayCycle:
                 query=entry["texto"],
             )
         except Exception:
+            self._db.execute(
+                "UPDATE entrada SET estado = 'nova' WHERE id = ?",
+                (entry_id,),
+            )
             return
         text = draft.strip()
         if not text:
