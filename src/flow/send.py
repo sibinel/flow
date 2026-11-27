@@ -32,7 +32,10 @@ class SmtpSender:
             return False
         row = self._db.execute(
             """
-            SELECT rascunho.texto, rascunho.estado, contato.valor,
+            SELECT rascunho.texto, rascunho.estado, contato.valor, contato.tipo,
+                   rascunho.texto_aprovado, rascunho.destino_aprovado,
+                   rascunho.canal_aprovado, rascunho.cliente_entrada_aprovado,
+                   rascunho.cliente_contato_aprovado,
                    entrada.cliente_id AS entrada_cliente,
                    contato.cliente_id AS contato_cliente
             FROM rascunho
@@ -44,13 +47,14 @@ class SmtpSender:
         ).fetchone()
         if row is None or row["estado"] != "aprovado":
             return False
-        if not same_client(row["entrada_cliente"], row["contato_cliente"]):
+        text, recipient, _channel, entry_client, contact_client = frozen_delivery(row)
+        if not same_client(entry_client, contact_client):
             hold_draft(self._db, draft_id)
             return False
         if not claim_draft(self._db, draft_id):
             return False
         self._tool = SendTool()
-        delivered = _deliver(host, port, sender, row["valor"], row["texto"], password)
+        delivered = _deliver(host, port, sender, recipient, text, password)
         if delivered is False:
             self._tool = None
             release_draft(self._db, draft_id)
@@ -103,18 +107,60 @@ def record_delivery(connection: sqlite3.Connection, draft_id: int, channel: str)
     connection.commit()
 
 
+def _close_smtp(smtp) -> None:
+    try:
+        smtp.quit()
+    except Exception:
+        try:
+            smtp.close()
+        except Exception:
+            return
+
+
 def _deliver(
     host: str, port: int, sender: str, recipient: str, body: str, password: str
 ) -> bool:
+    """Falha ao abrir ou entrar devolve falso. Falha depois do envio sobe."""
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
     message.set_content(body)
-    with _smtp(host, port) as smtp:
+    try:
+        smtp = _smtp(host, port)
+    except Exception:
+        return False
+    try:
         if host != "127.0.0.1":
             smtp.login(sender, password)
+    except Exception:
+        _close_smtp(smtp)
+        return False
+    try:
         smtp.send_message(message)
+    except Exception:
+        _close_smtp(smtp)
+        raise
+    _close_smtp(smtp)
     return True
+
+
+def frozen_delivery(row) -> tuple[str, str, str, int | None, int | None]:
+    """O envio lê a cópia feita na aprovação. Sem ela, usa a linha atual."""
+    if row["texto_aprovado"] is not None:
+        return (
+            row["texto_aprovado"],
+            row["destino_aprovado"] or "",
+            row["canal_aprovado"] or "",
+            row["cliente_entrada_aprovado"],
+            row["cliente_contato_aprovado"],
+        )
+    return (
+        row["texto"],
+        row["valor"],
+        row["tipo"],
+        row["entrada_cliente"],
+        row["contato_cliente"],
+    )
 
 
 def same_client(entry_client: int | None, contact_client: int | None) -> bool:
@@ -123,10 +169,16 @@ def same_client(entry_client: int | None, contact_client: int | None) -> bool:
 
 
 def hold_draft(connection: sqlite3.Connection, draft_id: int) -> None:
-    """Devolve o rascunho para a fila. Nada foi entregue."""
+    """Devolve o rascunho para a fila e solta a cópia. Nada foi entregue."""
     connection.execute(
         """
-        UPDATE rascunho SET estado = 'aguardando'
+        UPDATE rascunho
+        SET estado = 'aguardando',
+            texto_aprovado = NULL,
+            destino_aprovado = NULL,
+            canal_aprovado = NULL,
+            cliente_entrada_aprovado = NULL,
+            cliente_contato_aprovado = NULL
         WHERE id = ? AND estado = 'aprovado'
         """,
         (draft_id,),

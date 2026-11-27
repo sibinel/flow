@@ -10,7 +10,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from flow.classify import Classifier, ReadTool
-from flow.llm import CloudLLM
+from flow.llm import CloudLLM, load_model_key
+from flow.notice import publish_notice
+from flow.whatsapp import commit_cursor, discard_cursor
 from flow.when import parse_received
 
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -90,12 +92,17 @@ class DayCycle:
         slot_at = self._open_slot(now)
         if slot_at is None or self._done(slot_at):
             return CycleQueue((), (), False, ())
+        collect_ok = True
         if collect is not None:
             try:
-                collect()
+                if collect() is False:
+                    collect_ok = False
                 self._db.commit()
+                commit_cursor(self._db)
             except Exception:
                 self._db.rollback()
+                discard_cursor(self._db)
+                collect_ok = False
         try:
             sent = self._execute(slot_at, dispatch)
             drafts, pendings = self._queue(slot_at)
@@ -103,11 +110,12 @@ class DayCycle:
         except Exception:
             self._db.rollback()
             raise
-        save_config(
-            self._data_dir,
-            self.config,
-            slot_at.isoformat(timespec="seconds"),
-        )
+        if collect_ok:
+            save_config(
+                self._data_dir,
+                self.config,
+                slot_at.isoformat(timespec="seconds"),
+            )
         return CycleQueue(drafts, pendings, True, tuple(sent))
 
     def _open_slot(self, now: datetime) -> datetime | None:
@@ -199,13 +207,18 @@ class DayCycle:
         if entry is None or entry["cliente_id"] is None:
             return
         try:
-            draft = CloudLLM(self._db).complete(
+            draft = CloudLLM(self._db, api_key=load_model_key(self._data_dir)).complete(
                 "rascunho",
                 client_id=int(entry["cliente_id"]),
                 message=entry["texto"],
                 query=entry["texto"],
             )
-        except Exception:
+        except Exception as exc:
+            publish_notice(self._data_dir, str(exc))
+            self._db.execute(
+                "UPDATE entrada SET estado = 'nova' WHERE id = ?",
+                (entry_id,),
+            )
             return
         text = draft.strip()
         if not text:
@@ -224,7 +237,9 @@ class DayCycle:
         sent: list[int] = []
         rows = self._db.execute(
             """
-            SELECT rascunho.id, contato.tipo, entrada.recebido_em
+            SELECT rascunho.id,
+                   COALESCE(rascunho.canal_aprovado, contato.tipo) AS tipo,
+                   entrada.recebido_em
             FROM rascunho
             JOIN entrada ON entrada.id = rascunho.entrada_id
             JOIN contato ON contato.id = entrada.contato_id

@@ -64,22 +64,31 @@ class Harness:
 
 def _named_client(connection: sqlite3.Connection, phrase: str) -> int:
     folded = phrase.casefold()
-    best: tuple[int, int] | None = None
-    for row in connection.execute("SELECT id, nome FROM cliente"):
+    best_score = -1
+    found: list[int] = []
+    for row in connection.execute("SELECT id, nome FROM cliente ORDER BY id"):
         name = str(row["nome"]).casefold().strip()
         parts = [name, *name.split()] if name else []
+        score = None
         for part in parts:
             if len(part) < 3:
                 continue
-            if re.search(rf"\b{re.escape(part)}\b", folded) is None:
+            if re.search(rf"(?<!\w){re.escape(part)}(?!\w)", folded) is None:
                 continue
             score = len(part)
-            if best is None or score > best[0]:
-                best = (score, int(row["id"]))
             break
-    if best is None:
+        if score is None:
+            continue
+        if score > best_score:
+            best_score = score
+            found = [int(row["id"])]
+        elif score == best_score:
+            found.append(int(row["id"]))
+    if len(found) != 1:
+        if found:
+            raise ValueError("cliente ambíguo")
         raise ValueError("cliente não encontrado na frase")
-    return best[1]
+    return found[0]
 
 
 def _topic(phrase: str) -> str:

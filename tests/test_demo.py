@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from flow.controller import Controller
+from flow.paths import package_dir
 from flow.store import ensure_demo, open_database
 
 
@@ -99,7 +100,7 @@ class DemoQueueTest(unittest.TestCase):
         self.assertEqual(drafts[0]["texto"], "texto que já estava na fila")
         self.assertEqual(sent, 0)
 
-    def test_puts_existing_demo_texts_back_on_the_queue(self) -> None:
+    def test_existing_demo_texts_keep_their_state(self) -> None:
         with open_database(self.data) as connection:
             ensure_demo(connection)
             connection.execute(
@@ -124,10 +125,14 @@ class DemoQueueTest(unittest.TestCase):
             ).fetchone()
             sent = connection.execute("SELECT COUNT(*) FROM envio").fetchone()[0]
         self.assertEqual(len(drafts), 1)
-        self.assertEqual(drafts[0]["estado"], "aguardando")
-        self.assertEqual(pending["estado"], "pendente")
-        self.assertIsNone(pending["cliente_id"])
+        self.assertEqual(drafts[0]["estado"], "aprovado")
+        self.assertEqual(pending["estado"], "arquivada")
+        self.assertIsNotNone(pending["cliente_id"])
         self.assertEqual(sent, 0)
+
+    def test_the_window_controller_does_not_seed(self) -> None:
+        source = (package_dir() / "controller.py").read_text(encoding="utf-8")
+        self.assertNotIn("ensure_demo", source)
 
     def test_controller_with_a_given_folder_stays_empty(self) -> None:
         controller = Controller(self.data)

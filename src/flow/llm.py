@@ -12,6 +12,7 @@ import json
 import sqlite3
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from flow.store import search_trechos_do_cliente
 
@@ -34,6 +35,23 @@ _SYSTEM = {
 }
 
 
+def load_model_key(data_dir: Path) -> str:
+    """Chave no arquivo local. Sem o arquivo, a chamada não sai."""
+    path = Path(data_dir) / "modelo.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    key = data.get("api_key")
+    if not isinstance(key, str):
+        return ""
+    return key.strip()
+
+
 class CloudLLM:
     def __init__(self, connection: sqlite3.Connection, transport=None, api_key: str = "") -> None:
         self._db = connection
@@ -54,6 +72,8 @@ class CloudLLM:
     ) -> str:
         if task not in _SYSTEM:
             raise ValueError("tarefa desconhecida")
+        if not self._api_key:
+            raise RuntimeError("chave do modelo ausente")
         piece = _piece(self._db, task, entry_id, client_id, message, query)
         body = {
             "model": MODEL,

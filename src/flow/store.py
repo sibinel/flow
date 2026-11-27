@@ -60,7 +60,12 @@ CREATE TABLE IF NOT EXISTS rascunho (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
     texto TEXT NOT NULL,
-    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado', 'em curso'))
+    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado', 'em curso')),
+    texto_aprovado TEXT,
+    destino_aprovado TEXT,
+    canal_aprovado TEXT,
+    cliente_entrada_aprovado INTEGER,
+    cliente_contato_aprovado INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS envio (
@@ -153,6 +158,52 @@ def open_database(data_dir: Path) -> sqlite3.Connection:
     _migrate(connection)
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def _freeze_approved(connection: sqlite3.Connection) -> None:
+    """Copia texto, destino e clientes nos rascunhos que já estavam aprovados."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(rascunho)")}
+    fields = {
+        "texto_aprovado": "TEXT",
+        "destino_aprovado": "TEXT",
+        "canal_aprovado": "TEXT",
+        "cliente_entrada_aprovado": "INTEGER",
+        "cliente_contato_aprovado": "INTEGER",
+    }
+    for name, kind in fields.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE rascunho ADD COLUMN {name} {kind}")
+    connection.execute(
+        """
+        UPDATE rascunho
+        SET texto_aprovado = texto,
+            destino_aprovado = (
+                SELECT contato.valor
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = rascunho.entrada_id
+            ),
+            canal_aprovado = (
+                SELECT contato.tipo
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = rascunho.entrada_id
+            ),
+            cliente_entrada_aprovado = (
+                SELECT entrada.cliente_id
+                FROM entrada
+                WHERE entrada.id = rascunho.entrada_id
+            ),
+            cliente_contato_aprovado = (
+                SELECT contato.cliente_id
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = rascunho.entrada_id
+            )
+        WHERE estado IN ('aprovado', 'em curso')
+          AND texto_aprovado IS NULL
+        """
+    )
 
 
 def _migrate(connection: sqlite3.Connection) -> None:
@@ -251,6 +302,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute("DROP TABLE rascunho")
         connection.execute("ALTER TABLE rascunho_migrado RENAME TO rascunho")
         connection.execute("PRAGMA foreign_keys = ON")
+    _freeze_approved(connection)
     connection.commit()
 
 
@@ -318,15 +370,10 @@ def ensure_demo(connection: sqlite3.Connection) -> None:
         )
     for nome, tipo, valor, texto in _DEMO_DRAFTS:
         found = connection.execute(
-            "SELECT id, estado FROM rascunho WHERE texto = ?",
+            "SELECT id FROM rascunho WHERE texto = ?",
             (texto,),
         ).fetchone()
         if found:
-            if found["estado"] != "aguardando":
-                connection.execute(
-                    "UPDATE rascunho SET estado = 'aguardando' WHERE id = ?",
-                    (found["id"],),
-                )
             continue
         contact = _contact_id(connection, clients[nome], tipo, valor)
         entry = connection.execute(
@@ -346,27 +393,10 @@ def ensure_demo(connection: sqlite3.Connection) -> None:
         )
     for nome, tipo, valor, texto, motivo in _DEMO_PENDINGS:
         found = connection.execute(
-            "SELECT id, estado FROM entrada WHERE texto = ?",
+            "SELECT id FROM entrada WHERE texto = ?",
             (texto,),
         ).fetchone()
         if found:
-            if found["estado"] != "pendente":
-                connection.execute(
-                    """
-                    UPDATE entrada
-                    SET estado = 'pendente', cliente_id = NULL, processo_id = NULL
-                    WHERE id = ?
-                    """,
-                    (found["id"],),
-                )
-            if not connection.execute(
-                "SELECT 1 FROM pendencia WHERE entrada_id = ? AND motivo = ?",
-                (found["id"], motivo),
-            ).fetchone():
-                connection.execute(
-                    "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, ?)",
-                    (found["id"], motivo),
-                )
             continue
         contact = _contact_id(connection, clients[nome], tipo, valor)
         entry = connection.execute(

@@ -94,19 +94,30 @@ def _imap(host: str, port: int):
 def _parts(message) -> tuple[str, list[tuple[str, bytes]]]:
     body = ""
     attachments: list[tuple[str, bytes]] = []
-    if message.is_multipart():
-        for part in message.walk():
-            disposition = part.get_content_disposition()
-            if disposition == "attachment" or part.get_filename():
-                name = Path(part.get_filename() or "anexo").name
-                attachments.append((name, part.get_payload(decode=True) or b""))
-            elif part.get_content_type() == "text/plain" and not body:
-                content = part.get_content()
-                body = content if isinstance(content, str) else str(content)
-    else:
-        content = message.get_content()
-        body = content if isinstance(content, str) else str(content)
+    if not message.is_multipart():
+        return _single(message)
+    for part in message.walk():
+        disposition = part.get_content_disposition()
+        if disposition == "attachment" or part.get_filename():
+            name = Path(part.get_filename() or "anexo").name
+            attachments.append((name, part.get_payload(decode=True) or b""))
+        elif part.get_content_type() == "text/plain" and not body:
+            content = part.get_content()
+            body = content if isinstance(content, str) else str(content)
     return body.strip(), attachments
+
+
+def _single(message) -> tuple[str, list[tuple[str, bytes]]]:
+    """Uma parte só, com nome ou disposição de anexo, vira documento."""
+    filename = message.get_filename()
+    disposition = message.get_content_disposition()
+    if disposition == "attachment" or filename:
+        name = Path(filename or "anexo").name
+        payload = message.get_payload(decode=True) or b""
+        return "", [(name, payload)]
+    content = message.get_content()
+    body = content if isinstance(content, str) else ""
+    return body.strip(), []
 
 
 @dataclass(frozen=True)

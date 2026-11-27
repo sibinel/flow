@@ -52,6 +52,10 @@ class WindowLinkTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.controller = Controller(Path(self.tmp.name))
         self.db = open_database(self.controller.database_path.parent)
+        (Path(self.controller.dataDirectory) / "modelo.json").write_text(
+            json.dumps({"api_key": "teste"}),
+            encoding="utf-8",
+        )
         self._model = patch(
             "flow.llm.post_chat",
             return_value=_model("Pode protocolar a rescisão."),

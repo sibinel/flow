@@ -2,7 +2,7 @@
  * Ponte da sessão Web. Conta pessoal, protocolo do WhatsApp Web, sem navegador.
  * Sem credenciais registradas, leitura e envio saem antes de abrir a conexão.
  */
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import pino from 'pino'
 import QRCode from 'qrcode'
@@ -213,10 +213,6 @@ function loadCursor(folder) {
   }
 }
 
-function saveCursor(folder, cursor) {
-  writeFileSync(cursorFile(folder), JSON.stringify(cursor))
-}
-
 async function askGap(sock, cursor) {
   if (typeof sock.fetchMessageHistory !== 'function') return
   for (const [chat, mark] of Object.entries(cursor)) {
@@ -245,25 +241,14 @@ function applyCursor(folder, messages) {
     byChat.set(message.from, list)
   }
   const kept = []
-  const next = { ...cursor }
   for (const [chat, list] of byChat) {
     list.sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)))
     const mark = cursor[chat]
-    let advanced = mark ? { id: mark.id, time: mark.time } : null
-    let blocked = false
     for (const message of list) {
       const after = !mark || String(message.received_at) >= String(mark.time)
       if (after) kept.push(message)
-      if (blocked) continue
-      if (message.media_note) {
-        blocked = true
-        continue
-      }
-      advanced = { id: message.id, time: message.received_at }
     }
-    if (advanced) next[chat] = advanced
   }
-  saveCursor(folder, next)
   return kept
 }
 
@@ -350,9 +335,20 @@ async function readMessages(folder) {
 
 async function sendMessage(folder) {
   const digits = String(request.to || '').replace(/\D/g, '')
-  if (!digits) throw new Error('destino vazio')
-  const sock = await connect(folder, false, null)
-  await sock.sendMessage(`${digits}@s.whatsapp.net`, { text: String(request.text || '') })
+  if (!digits) return { sent: false, handed: false }
+  let sock
+  try {
+    sock = await connect(folder, false, null)
+  } catch (error) {
+    if (error && error.code === 'qr') throw error
+    return { sent: false, handed: false }
+  }
+  try {
+    await sock.sendMessage(`${digits}@s.whatsapp.net`, { text: String(request.text || '') })
+  } catch {
+    end(sock)
+    return { sent: false, handed: true }
+  }
   await new Promise((resolve) => setTimeout(resolve, 300))
   end(sock)
   return { sent: true }

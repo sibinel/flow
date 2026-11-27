@@ -11,13 +11,14 @@ from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, Signal, 
 from flow.classify import Classifier, ReadTool
 from flow.cycle import DayCycle
 from flow.harness import Harness
-from flow.llm import CloudLLM
+from flow.llm import CloudLLM, load_model_key
+from flow.notice import clear_notice, publish_notice, read_notice
 from flow.mail import ImapReader, load_mail_account
 from flow.paths import ensure_user_data, whatsapp_session
 from flow.send import SmtpSender, load_smtp_target
-from flow.whatsapp import WhatsAppReader, WhatsAppSender, pair, session_ready
+from flow.whatsapp import WhatsAppReader, WhatsAppSender, commit_cursor, pair, session_ready
 from flow.queue import RecordModel
-from flow.store import database_file, ensure_demo, open_database
+from flow.store import database_file, open_database
 
 _STOPPED = "Leitura e envio de WhatsApp estão parados."
 
@@ -31,14 +32,13 @@ class Controller(QObject):
         self._data_dir = ensure_user_data(data_root)
         self._db = open_database(self._data_dir)
         self._qr_image = ""
+        self._notice = ""
         self._session_ready = False
         self._clock: QTimer | None = None
         self._qr_clock: QTimer | None = None
         self._pairing = False
         self._cycle_thread: threading.Thread | None = None
         self.backgroundDone.connect(self._reload)
-        if data_root is None:
-            ensure_demo(self._db)
         self._drafts = RecordModel(["draftId", "text", "address", "channel", "state"])
         self._pendings = RecordModel(["entryId", "text", "reason"])
         self._clients = RecordModel(["clientId", "name"])
@@ -91,19 +91,27 @@ class Controller(QObject):
             db.close()
             self.backgroundDone.emit()
 
-    def _collect(self, connection=None) -> None:
-        """Coleta antes da fila. Sem conta ou sem sessão, esse lado não corre."""
+    def _collect(self, connection=None) -> bool:
+        """Coleta antes da fila. Um lado que falha não impede o outro."""
         db = self._db if connection is None else connection
+        ok = True
         account = load_mail_account(self._data_dir)
         if account is not None:
-            ImapReader(db, self._data_dir).ingest(
-                account.imap_host,
-                account.imap_port,
-                account.user,
-                account.password,
-            )
-        if session_ready(whatsapp_session(self._data_dir)):
-            WhatsAppReader(db, self._data_dir).ingest()
+            try:
+                ImapReader(db, self._data_dir).ingest(
+                    account.imap_host,
+                    account.imap_port,
+                    account.user,
+                    account.password,
+                )
+            except Exception:
+                ok = False
+        try:
+            if session_ready(whatsapp_session(self._data_dir)):
+                WhatsAppReader(db, self._data_dir).ingest()
+        except Exception:
+            ok = False
+        return ok
 
     def _dispatch_approved(self, draft_id: int, channel: str, connection=None) -> bool:
         db = self._db if connection is None else connection
@@ -174,15 +182,47 @@ class Controller(QObject):
     def qrImage(self) -> str:
         return self._qr_image
 
+    @Property(str, notify=surfaceChanged)
+    def notice(self) -> str:
+        return self._notice
+
     @Slot(int, result=bool)
     def approve(self, draft_id: int) -> bool:
-        """Marca o rascunho como aprovado. Não cria envio."""
-        changed = self._db.execute(
+        """Marca o rascunho como aprovado e congela texto, destino e clientes."""
+        row = self._db.execute(
             """
-            UPDATE rascunho SET estado = 'aprovado'
-            WHERE id = ? AND estado = 'aguardando'
+            SELECT rascunho.texto, contato.valor, contato.tipo,
+                   entrada.cliente_id AS entrada_cliente,
+                   contato.cliente_id AS contato_cliente
+            FROM rascunho
+            JOIN entrada ON entrada.id = rascunho.entrada_id
+            JOIN contato ON contato.id = entrada.contato_id
+            WHERE rascunho.id = ? AND rascunho.estado = 'aguardando'
             """,
             (draft_id,),
+        ).fetchone()
+        if row is None:
+            self._db.rollback()
+            return False
+        changed = self._db.execute(
+            """
+            UPDATE rascunho
+            SET estado = 'aprovado',
+                texto_aprovado = ?,
+                destino_aprovado = ?,
+                canal_aprovado = ?,
+                cliente_entrada_aprovado = ?,
+                cliente_contato_aprovado = ?
+            WHERE id = ? AND estado = 'aguardando'
+            """,
+            (
+                row["texto"],
+                row["valor"],
+                row["tipo"],
+                row["entrada_cliente"],
+                row["contato_cliente"],
+                draft_id,
+            ),
         )
         if changed.rowcount != 1:
             self._db.rollback()
@@ -272,6 +312,7 @@ class Controller(QObject):
         """Lê o WhatsApp. Sem sessão gravada, para até um QR novo. Não envia."""
         entry_ids = WhatsAppReader(self._db, self._data_dir, runner).ingest()
         self._db.commit()
+        commit_cursor(self._db)
         self._reload()
         return entry_ids
 
@@ -323,7 +364,11 @@ class Controller(QObject):
         transport=None,
     ) -> str:
         """Chama o modelo com o pedaço da tarefa. Não envia."""
-        return CloudLLM(self._db, transport=transport).complete(
+        return CloudLLM(
+            self._db,
+            transport=transport,
+            api_key=load_model_key(self._data_dir),
+        ).complete(
             task,
             entry_id=entry_id,
             client_id=client_id,
@@ -334,8 +379,18 @@ class Controller(QObject):
     @Slot(str, result=int)
     def search(self, phrase: str, transport=None) -> int:
         """Busca trechos do cliente citado e grava o rascunho. Não envia."""
+        key = load_model_key(self._data_dir)
         if transport is not None:
-            hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
+            try:
+                hit = Harness(
+                    self._db,
+                    CloudLLM(self._db, transport=transport, api_key=key),
+                ).search(phrase)
+            except Exception as exc:
+                publish_notice(self._data_dir, str(exc))
+                self._reload()
+                return 0
+            clear_notice(self._data_dir)
             self._reload()
             return hit.draft_id
         threading.Thread(target=self._search_away, args=(phrase,), daemon=True).start()
@@ -345,9 +400,15 @@ class Controller(QObject):
         db = open_database(self._data_dir)
         try:
             try:
-                Harness(db, CloudLLM(db)).search(phrase)
-            except Exception:
+                Harness(
+                    db,
+                    CloudLLM(db, api_key=load_model_key(self._data_dir)),
+                ).search(phrase)
+            except Exception as exc:
                 db.rollback()
+                publish_notice(self._data_dir, str(exc))
+            else:
+                clear_notice(self._data_dir)
         finally:
             db.close()
             self.backgroundDone.emit()
@@ -380,6 +441,8 @@ class Controller(QObject):
         return row is not None
 
     def _reload(self) -> None:
+        self._notice = read_notice(self._data_dir)
+        self.surfaceChanged.emit()
         self._drafts.replace(
             [
                 {
@@ -391,8 +454,11 @@ class Controller(QObject):
                 }
                 for row in self._db.execute(
                     """
-                    SELECT rascunho.id, rascunho.texto, rascunho.estado,
-                           contato.valor, contato.tipo
+                    SELECT rascunho.id,
+                           COALESCE(rascunho.texto_aprovado, rascunho.texto) AS texto,
+                           rascunho.estado,
+                           COALESCE(rascunho.destino_aprovado, contato.valor) AS valor,
+                           COALESCE(rascunho.canal_aprovado, contato.tipo) AS tipo
                     FROM rascunho
                     JOIN entrada ON entrada.id = rascunho.entrada_id
                     JOIN contato ON contato.id = entrada.contato_id

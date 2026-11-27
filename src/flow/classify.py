@@ -136,14 +136,19 @@ def _same_person(introduced: str, owner: str) -> bool:
     return token in parts or token == owner.casefold()
 
 
+def _phrase(text: str, phrase: str) -> bool:
+    """O número ou o título inteiro, não um pedaço no meio de outra palavra."""
+    if not phrase:
+        return False
+    pattern = rf"(?<!\w){re.escape(phrase.casefold())}(?!\w)"
+    return re.search(pattern, text.casefold()) is not None
+
+
 def _cited(text: str, processes: tuple[ProcessView, ...]) -> list[int]:
-    folded = text.casefold()
     hits: list[int] = []
     for process in processes:
-        number = process.number.casefold()
-        title = process.title.casefold()
-        if number and number in folded:
+        if _phrase(text, process.number):
             hits.append(process.id)
-        elif len(title) >= 4 and title in folded:
+        elif len(process.title) >= 4 and _phrase(text, process.title):
             hits.append(process.id)
     return hits

@@ -20,11 +20,66 @@ from flow.paths import package_dir, store_document, whatsapp_session
 from flow.send import (
     SendTool,
     claim_draft,
+    frozen_delivery,
     hold_draft,
     record_delivery,
     release_draft,
     same_client,
 )
+
+
+_cursors: dict[int, tuple] = {}
+
+
+def commit_cursor(connection: sqlite3.Connection) -> None:
+    """Avança o cursor só depois que o banco guardou a mensagem."""
+    plan = _cursors.pop(id(connection), None)
+    if plan is None:
+        return
+    session, messages, confirmed = plan
+    _advance_cursor(session, messages, confirmed)
+
+
+def discard_cursor(connection: sqlite3.Connection) -> None:
+    _cursors.pop(id(connection), None)
+
+
+def _load_cursor(session: Path) -> dict:
+    path = session / "cursor.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _advance_cursor(session: Path, messages: list, confirmed: list) -> None:
+    done = {id(item) for item in confirmed}
+    cursor = _load_cursor(session)
+    by_chat: dict[str, list] = {}
+    for message in messages:
+        chat = str(message.get("from") or "")
+        by_chat.setdefault(chat, []).append(message)
+    for chat, batch in by_chat.items():
+        batch.sort(key=lambda item: str(item.get("received_at") or ""))
+        mark = cursor.get(chat)
+        advanced = None
+        if isinstance(mark, dict) and mark.get("id"):
+            advanced = {"id": mark.get("id"), "time": mark.get("time")}
+        blocked = False
+        for message in batch:
+            if blocked:
+                continue
+            if str(message.get("media_note") or "").strip():
+                blocked = True
+                continue
+            if id(message) not in done:
+                blocked = True
+                continue
+            advanced = {"id": message.get("id"), "time": message.get("received_at")}
+        if advanced:
+            cursor[chat] = advanced
+    (session / "cursor.json").write_text(json.dumps(cursor), encoding="utf-8")
 
 
 class SessionRequired(RuntimeError):
@@ -68,9 +123,21 @@ class WhatsAppReader:
         session = _require_session(self._data_dir)
         result = self._runner(session, "read", {})
         _refuse_qr(result)
-        return keep_each(self._db, result.get("messages") or [], self._save)
+        messages = list(result.get("messages") or [])
+        confirmed: list[dict] = []
+
+        def save(message: dict) -> int | None:
+            entry_id = self._save(message)
+            if self._durable:
+                confirmed.append(message)
+            return entry_id
+
+        saved = keep_each(self._db, messages, save)
+        _cursors[id(self._db)] = (session, messages, confirmed)
+        return saved
 
     def _save(self, message: dict) -> int | None:
+        self._durable = False
         original = str(message.get("text") or "").strip()
         note = str(message.get("media_note") or "").strip()
         if note:
@@ -85,6 +152,7 @@ class WhatsAppReader:
             if not attachments:
                 return None
             self._store_files(pending, attachments)
+            self._durable = True
             self._db.execute(
                 """
                 DELETE FROM pendencia
@@ -118,8 +186,10 @@ class WhatsAppReader:
             media_failed=bool(note) and not attachments,
         )
         if entry_id is None:
+            self._durable = True
             return None
         self._store_files(entry_id, attachments)
+        self._durable = True
         return entry_id
 
     def _pending_media(self, stored_id: str, chat: str) -> int | None:
@@ -168,6 +238,9 @@ class WhatsAppSender:
         row = self._db.execute(
             """
             SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor,
+                   rascunho.texto_aprovado, rascunho.destino_aprovado,
+                   rascunho.canal_aprovado, rascunho.cliente_entrada_aprovado,
+                   rascunho.cliente_contato_aprovado,
                    entrada.cliente_id AS entrada_cliente,
                    contato.cliente_id AS contato_cliente
             FROM rascunho
@@ -177,22 +250,43 @@ class WhatsAppSender:
             """,
             (draft_id,),
         ).fetchone()
-        if row is None or row["estado"] != "aprovado" or row["tipo"] != "whatsapp":
+        if row is None or row["estado"] != "aprovado":
             return False
-        if not same_client(row["entrada_cliente"], row["contato_cliente"]):
+        text, recipient, channel, entry_client, contact_client = frozen_delivery(row)
+        if channel != "whatsapp":
+            return False
+        if not same_client(entry_client, contact_client):
             hold_draft(self._db, draft_id)
             return False
         session = _require_session(self._data_dir)
         if not claim_draft(self._db, draft_id):
             return False
         self._tool = SendTool()
-        outcome = self._runner(session, "send", {"to": row["valor"], "text": row["texto"]})
-        if outcome is False:
+        outcome = self._runner(session, "send", {"to": recipient, "text": text})
+        if _not_handed(outcome):
             self._tool = None
             release_draft(self._db, draft_id)
             return False
+        if not _was_sent(outcome):
+            self._tool = None
+            return False
         record_delivery(self._db, draft_id, "whatsapp")
         return True
+
+
+def _not_handed(outcome) -> bool:
+    """A ponte nem chegou a pedir o envio."""
+    if outcome is False:
+        return True
+    if not isinstance(outcome, dict):
+        return False
+    return outcome.get("sent") is not True and outcome.get("handed") is not True
+
+
+def _was_sent(outcome) -> bool:
+    if outcome is True:
+        return True
+    return isinstance(outcome, dict) and outcome.get("sent") is True
 
 
 def _already_sent(connection: sqlite3.Connection, draft_id: int) -> bool:
