@@ -32,12 +32,21 @@ def already_stored(
     """O mesmo id em outra conta, ou em outro chat, não é a mesma mensagem."""
     if not message_id:
         return False
+    if canal == "whatsapp":
+        found = connection.execute(
+            """
+            SELECT 1 FROM entrada
+            WHERE canal = ? AND mensagem_id = ? AND conta IN (?, ?)
+            """,
+            (canal, message_id, conta, sender or conta),
+        ).fetchone()
+        return found is not None
     found = connection.execute(
         """
         SELECT 1 FROM entrada
-        WHERE canal = ? AND mensagem_id = ? AND conta IN (?, ?)
+        WHERE canal = ? AND mensagem_id = ? AND conta = ?
         """,
-        (canal, message_id, conta, sender or conta),
+        (canal, message_id, conta),
     ).fetchone()
     return found is not None
 
@@ -90,17 +99,17 @@ def open_entry(
     if already_stored(connection, kind, account, stored_id, value):
         return None
     contact_id, known = contact_for(connection, kind, value)
-    reason = None
+    reasons: list[str] = []
     if not known:
-        reason = "contato novo"
-    elif media_failed or (not has_text and not has_file):
-        reason = "mídia não baixada"
+        reasons.append("contato novo")
+    if media_failed or (known and not has_text and not has_file):
+        reasons.append("mídia não baixada")
     received = stored_received(received_at)
-    if received is None and reason is None:
-        reason = "data ilegível"
+    if received is None and not reasons:
+        reasons.append("data ilegível")
     body = text.strip()
     if not body:
-        body = reason or ""
+        body = reasons[0] if reasons else ""
     entry_id = connection.execute(
         """
         INSERT INTO entrada (
@@ -112,14 +121,14 @@ def open_entry(
             contact_id,
             received if received is not None else (received_at or ""),
             body,
-            "pendente" if reason else "nova",
+            "pendente" if reasons else "nova",
             stored_id or None,
             kind,
             account,
         ),
     ).lastrowid
     saved = int(entry_id)
-    if reason is not None:
+    for reason in reasons:
         connection.execute(
             "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, ?)",
             (saved, reason),

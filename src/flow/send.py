@@ -107,17 +107,40 @@ def record_delivery(connection: sqlite3.Connection, draft_id: int, channel: str)
     connection.commit()
 
 
+def _close_smtp(smtp) -> None:
+    try:
+        smtp.quit()
+    except Exception:
+        try:
+            smtp.close()
+        except Exception:
+            return
+
+
 def _deliver(
     host: str, port: int, sender: str, recipient: str, body: str, password: str
 ) -> bool:
+    """Falha ao abrir ou entrar devolve falso. Falha depois do envio sobe."""
     message = EmailMessage()
     message["From"] = sender
     message["To"] = recipient
     message.set_content(body)
-    with _smtp(host, port) as smtp:
+    try:
+        smtp = _smtp(host, port)
+    except Exception:
+        return False
+    try:
         if host != "127.0.0.1":
             smtp.login(sender, password)
+    except Exception:
+        _close_smtp(smtp)
+        return False
+    try:
         smtp.send_message(message)
+    except Exception:
+        _close_smtp(smtp)
+        raise
+    _close_smtp(smtp)
     return True
 
 
