@@ -176,13 +176,41 @@ class Controller(QObject):
 
     @Slot(int, result=bool)
     def approve(self, draft_id: int) -> bool:
-        """Marca o rascunho como aprovado. Não cria envio."""
-        changed = self._db.execute(
+        """Marca o rascunho como aprovado e congela texto, destino e clientes."""
+        row = self._db.execute(
             """
-            UPDATE rascunho SET estado = 'aprovado'
-            WHERE id = ? AND estado = 'aguardando'
+            SELECT rascunho.texto, contato.valor, contato.tipo,
+                   entrada.cliente_id AS entrada_cliente,
+                   contato.cliente_id AS contato_cliente
+            FROM rascunho
+            JOIN entrada ON entrada.id = rascunho.entrada_id
+            JOIN contato ON contato.id = entrada.contato_id
+            WHERE rascunho.id = ? AND rascunho.estado = 'aguardando'
             """,
             (draft_id,),
+        ).fetchone()
+        if row is None:
+            self._db.rollback()
+            return False
+        changed = self._db.execute(
+            """
+            UPDATE rascunho
+            SET estado = 'aprovado',
+                texto_aprovado = ?,
+                destino_aprovado = ?,
+                canal_aprovado = ?,
+                cliente_entrada_aprovado = ?,
+                cliente_contato_aprovado = ?
+            WHERE id = ? AND estado = 'aguardando'
+            """,
+            (
+                row["texto"],
+                row["valor"],
+                row["tipo"],
+                row["entrada_cliente"],
+                row["contato_cliente"],
+                draft_id,
+            ),
         )
         if changed.rowcount != 1:
             self._db.rollback()
@@ -391,8 +419,11 @@ class Controller(QObject):
                 }
                 for row in self._db.execute(
                     """
-                    SELECT rascunho.id, rascunho.texto, rascunho.estado,
-                           contato.valor, contato.tipo
+                    SELECT rascunho.id,
+                           COALESCE(rascunho.texto_aprovado, rascunho.texto) AS texto,
+                           rascunho.estado,
+                           COALESCE(rascunho.destino_aprovado, contato.valor) AS valor,
+                           COALESCE(rascunho.canal_aprovado, contato.tipo) AS tipo
                     FROM rascunho
                     JOIN entrada ON entrada.id = rascunho.entrada_id
                     JOIN contato ON contato.id = entrada.contato_id

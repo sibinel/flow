@@ -60,7 +60,12 @@ CREATE TABLE IF NOT EXISTS rascunho (
     id INTEGER PRIMARY KEY,
     entrada_id INTEGER NOT NULL REFERENCES entrada(id),
     texto TEXT NOT NULL,
-    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado', 'em curso'))
+    estado TEXT NOT NULL CHECK (estado IN ('aguardando', 'aprovado', 'enviado', 'em curso')),
+    texto_aprovado TEXT,
+    destino_aprovado TEXT,
+    canal_aprovado TEXT,
+    cliente_entrada_aprovado INTEGER,
+    cliente_contato_aprovado INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS envio (
@@ -153,6 +158,52 @@ def open_database(data_dir: Path) -> sqlite3.Connection:
     _migrate(connection)
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def _freeze_approved(connection: sqlite3.Connection) -> None:
+    """Copia texto, destino e clientes nos rascunhos que já estavam aprovados."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(rascunho)")}
+    fields = {
+        "texto_aprovado": "TEXT",
+        "destino_aprovado": "TEXT",
+        "canal_aprovado": "TEXT",
+        "cliente_entrada_aprovado": "INTEGER",
+        "cliente_contato_aprovado": "INTEGER",
+    }
+    for name, kind in fields.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE rascunho ADD COLUMN {name} {kind}")
+    connection.execute(
+        """
+        UPDATE rascunho
+        SET texto_aprovado = texto,
+            destino_aprovado = (
+                SELECT contato.valor
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = rascunho.entrada_id
+            ),
+            canal_aprovado = (
+                SELECT contato.tipo
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = rascunho.entrada_id
+            ),
+            cliente_entrada_aprovado = (
+                SELECT entrada.cliente_id
+                FROM entrada
+                WHERE entrada.id = rascunho.entrada_id
+            ),
+            cliente_contato_aprovado = (
+                SELECT contato.cliente_id
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = rascunho.entrada_id
+            )
+        WHERE estado IN ('aprovado', 'em curso')
+          AND texto_aprovado IS NULL
+        """
+    )
 
 
 def _migrate(connection: sqlite3.Connection) -> None:
@@ -251,6 +302,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute("DROP TABLE rascunho")
         connection.execute("ALTER TABLE rascunho_migrado RENAME TO rascunho")
         connection.execute("PRAGMA foreign_keys = ON")
+    _freeze_approved(connection)
     connection.commit()
 
 

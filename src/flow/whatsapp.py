@@ -20,6 +20,7 @@ from flow.paths import package_dir, store_document, whatsapp_session
 from flow.send import (
     SendTool,
     claim_draft,
+    frozen_delivery,
     hold_draft,
     record_delivery,
     release_draft,
@@ -168,6 +169,9 @@ class WhatsAppSender:
         row = self._db.execute(
             """
             SELECT rascunho.texto, rascunho.estado, contato.tipo, contato.valor,
+                   rascunho.texto_aprovado, rascunho.destino_aprovado,
+                   rascunho.canal_aprovado, rascunho.cliente_entrada_aprovado,
+                   rascunho.cliente_contato_aprovado,
                    entrada.cliente_id AS entrada_cliente,
                    contato.cliente_id AS contato_cliente
             FROM rascunho
@@ -177,16 +181,19 @@ class WhatsAppSender:
             """,
             (draft_id,),
         ).fetchone()
-        if row is None or row["estado"] != "aprovado" or row["tipo"] != "whatsapp":
+        if row is None or row["estado"] != "aprovado":
             return False
-        if not same_client(row["entrada_cliente"], row["contato_cliente"]):
+        text, recipient, channel, entry_client, contact_client = frozen_delivery(row)
+        if channel != "whatsapp":
+            return False
+        if not same_client(entry_client, contact_client):
             hold_draft(self._db, draft_id)
             return False
         session = _require_session(self._data_dir)
         if not claim_draft(self._db, draft_id):
             return False
         self._tool = SendTool()
-        outcome = self._runner(session, "send", {"to": row["valor"], "text": row["texto"]})
+        outcome = self._runner(session, "send", {"to": recipient, "text": text})
         if outcome is False:
             self._tool = None
             release_draft(self._db, draft_id)

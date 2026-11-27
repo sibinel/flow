@@ -224,7 +224,9 @@ class DayCycle:
         sent: list[int] = []
         rows = self._db.execute(
             """
-            SELECT rascunho.id, contato.tipo, entrada.recebido_em
+            SELECT rascunho.id,
+                   COALESCE(rascunho.canal_aprovado, contato.tipo) AS tipo,
+                   entrada.recebido_em
             FROM rascunho
             JOIN entrada ON entrada.id = rascunho.entrada_id
             JOIN contato ON contato.id = entrada.contato_id
