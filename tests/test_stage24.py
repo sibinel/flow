@@ -67,6 +67,10 @@ class SeparateCollectTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             controller = Controller(root)
+            (root / "modelo.json").write_text(
+                json.dumps({"api_key": "teste"}),
+                encoding="utf-8",
+            )
             db = open_database(root)
             bruno = db.execute(
                 "INSERT INTO cliente (nome, status) VALUES ('Bruno Dias', 'cliente')"
@@ -141,6 +145,10 @@ class SeparateCollectTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             controller = Controller(root)
+            (root / "modelo.json").write_text(
+                json.dumps({"api_key": "teste"}),
+                encoding="utf-8",
+            )
             db = open_database(root)
             bruno = db.execute(
                 "INSERT INTO cliente (nome, status) VALUES ('Bruno Dias', 'cliente')"

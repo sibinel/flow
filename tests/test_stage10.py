@@ -49,6 +49,10 @@ class DayCycleTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.controller = Controller(Path(self.tmp.name))
         self.db = open_database(self.controller.database_path.parent)
+        (Path(self.controller.dataDirectory) / "modelo.json").write_text(
+            json.dumps({"api_key": "teste"}),
+            encoding="utf-8",
+        )
         self.calls: list[tuple[int, str]] = []
 
     def tearDown(self) -> None:
@@ -347,6 +351,10 @@ class ModelFollowupTest(unittest.TestCase):
     def test_followup_uses_only_that_client_and_a_failure_sends_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             controller = Controller(Path(name))
+            (Path(name) / "modelo.json").write_text(
+                json.dumps({"api_key": "teste"}),
+                encoding="utf-8",
+            )
             db = open_database(Path(name))
             bruno = _client(db, "Bruno Dias")
             ana = _client(db, "Ana Lima")

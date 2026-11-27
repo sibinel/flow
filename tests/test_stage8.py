@@ -219,7 +219,10 @@ class ModelCallTest(unittest.TestCase):
             }
 
         with self.assertRaises(RuntimeError):
-            CloudLLM(self.db, transport=tool_call).complete("classificacao", entry_id=entry)
+            CloudLLM(self.db, transport=tool_call, api_key="teste").complete(
+                "classificacao",
+                entry_id=entry,
+            )
 
         state = self.db.execute(
             "SELECT estado FROM rascunho WHERE id = ?",

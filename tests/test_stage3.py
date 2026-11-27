@@ -215,6 +215,7 @@ class WindowCallsOnlyTheControllerTest(unittest.TestCase):
                 "clients",
                 "processes",
                 "whatsappNotice",
+                "notice",
                 "qrImage",
             }
         )

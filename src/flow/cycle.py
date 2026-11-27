@@ -10,7 +10,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from flow.classify import Classifier, ReadTool
-from flow.llm import CloudLLM
+from flow.llm import CloudLLM, load_model_key
+from flow.notice import publish_notice
+from flow.whatsapp import commit_cursor, discard_cursor
 from flow.when import parse_received
 
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -96,8 +98,10 @@ class DayCycle:
                 if collect() is False:
                     collect_ok = False
                 self._db.commit()
+                commit_cursor(self._db)
             except Exception:
                 self._db.rollback()
+                discard_cursor(self._db)
                 collect_ok = False
         try:
             sent = self._execute(slot_at, dispatch)
@@ -203,13 +207,14 @@ class DayCycle:
         if entry is None or entry["cliente_id"] is None:
             return
         try:
-            draft = CloudLLM(self._db).complete(
+            draft = CloudLLM(self._db, api_key=load_model_key(self._data_dir)).complete(
                 "rascunho",
                 client_id=int(entry["cliente_id"]),
                 message=entry["texto"],
                 query=entry["texto"],
             )
-        except Exception:
+        except Exception as exc:
+            publish_notice(self._data_dir, str(exc))
             self._db.execute(
                 "UPDATE entrada SET estado = 'nova' WHERE id = ?",
                 (entry_id,),

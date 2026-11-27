@@ -85,7 +85,7 @@ class SearchTest(unittest.TestCase):
             piece = json.loads(body["messages"][1]["content"])
             return {"choices": [{"message": {"content": "\n".join(piece["trechos"])}}]}
 
-        harness = Harness(self.db, CloudLLM(self.db, transport=transport))
+        harness = Harness(self.db, CloudLLM(self.db, transport=transport, api_key="teste"))
         self.assertEqual(harness.tool_names(), ("leitura",))
         self.assertNotIn("envio", harness.tool_names())
         hit = harness.search(PHRASE)

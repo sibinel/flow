@@ -120,6 +120,15 @@ ApplicationWindow {
             Layout.fillWidth: true
         }
 
+        Label {
+            visible: controller.notice.length > 0
+            text: controller.notice
+            color: "#fbbf24"
+            font.pixelSize: 14
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
+
         Image {
             visible: controller.qrImage.length > 0
             source: controller.qrImage.length > 0 ? controller.qrImage : ""

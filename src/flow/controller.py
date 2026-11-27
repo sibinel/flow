@@ -11,13 +11,14 @@ from PySide6.QtCore import Property, QCoreApplication, QObject, QTimer, Signal, 
 from flow.classify import Classifier, ReadTool
 from flow.cycle import DayCycle
 from flow.harness import Harness
-from flow.llm import CloudLLM
+from flow.llm import CloudLLM, load_model_key
+from flow.notice import clear_notice, publish_notice, read_notice
 from flow.mail import ImapReader, load_mail_account
 from flow.paths import ensure_user_data, whatsapp_session
 from flow.send import SmtpSender, load_smtp_target
-from flow.whatsapp import WhatsAppReader, WhatsAppSender, pair, session_ready
+from flow.whatsapp import WhatsAppReader, WhatsAppSender, commit_cursor, pair, session_ready
 from flow.queue import RecordModel
-from flow.store import database_file, ensure_demo, open_database
+from flow.store import database_file, open_database
 
 _STOPPED = "Leitura e envio de WhatsApp estão parados."
 
@@ -31,14 +32,13 @@ class Controller(QObject):
         self._data_dir = ensure_user_data(data_root)
         self._db = open_database(self._data_dir)
         self._qr_image = ""
+        self._notice = ""
         self._session_ready = False
         self._clock: QTimer | None = None
         self._qr_clock: QTimer | None = None
         self._pairing = False
         self._cycle_thread: threading.Thread | None = None
         self.backgroundDone.connect(self._reload)
-        if data_root is None:
-            ensure_demo(self._db)
         self._drafts = RecordModel(["draftId", "text", "address", "channel", "state"])
         self._pendings = RecordModel(["entryId", "text", "reason"])
         self._clients = RecordModel(["clientId", "name"])
@@ -182,6 +182,10 @@ class Controller(QObject):
     def qrImage(self) -> str:
         return self._qr_image
 
+    @Property(str, notify=surfaceChanged)
+    def notice(self) -> str:
+        return self._notice
+
     @Slot(int, result=bool)
     def approve(self, draft_id: int) -> bool:
         """Marca o rascunho como aprovado e congela texto, destino e clientes."""
@@ -308,6 +312,7 @@ class Controller(QObject):
         """Lê o WhatsApp. Sem sessão gravada, para até um QR novo. Não envia."""
         entry_ids = WhatsAppReader(self._db, self._data_dir, runner).ingest()
         self._db.commit()
+        commit_cursor(self._db)
         self._reload()
         return entry_ids
 
@@ -359,7 +364,11 @@ class Controller(QObject):
         transport=None,
     ) -> str:
         """Chama o modelo com o pedaço da tarefa. Não envia."""
-        return CloudLLM(self._db, transport=transport).complete(
+        return CloudLLM(
+            self._db,
+            transport=transport,
+            api_key=load_model_key(self._data_dir),
+        ).complete(
             task,
             entry_id=entry_id,
             client_id=client_id,
@@ -370,8 +379,18 @@ class Controller(QObject):
     @Slot(str, result=int)
     def search(self, phrase: str, transport=None) -> int:
         """Busca trechos do cliente citado e grava o rascunho. Não envia."""
+        key = load_model_key(self._data_dir)
         if transport is not None:
-            hit = Harness(self._db, CloudLLM(self._db, transport=transport)).search(phrase)
+            try:
+                hit = Harness(
+                    self._db,
+                    CloudLLM(self._db, transport=transport, api_key=key),
+                ).search(phrase)
+            except Exception as exc:
+                publish_notice(self._data_dir, str(exc))
+                self._reload()
+                return 0
+            clear_notice(self._data_dir)
             self._reload()
             return hit.draft_id
         threading.Thread(target=self._search_away, args=(phrase,), daemon=True).start()
@@ -381,9 +400,15 @@ class Controller(QObject):
         db = open_database(self._data_dir)
         try:
             try:
-                Harness(db, CloudLLM(db)).search(phrase)
-            except Exception:
+                Harness(
+                    db,
+                    CloudLLM(db, api_key=load_model_key(self._data_dir)),
+                ).search(phrase)
+            except Exception as exc:
                 db.rollback()
+                publish_notice(self._data_dir, str(exc))
+            else:
+                clear_notice(self._data_dir)
         finally:
             db.close()
             self.backgroundDone.emit()
@@ -416,6 +441,8 @@ class Controller(QObject):
         return row is not None
 
     def _reload(self) -> None:
+        self._notice = read_notice(self._data_dir)
+        self.surfaceChanged.emit()
         self._drafts.replace(
             [
                 {
