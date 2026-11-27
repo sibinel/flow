@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from flow.paths import begin_files, end_files
 from flow.when import stored_received
 
 
@@ -131,13 +132,18 @@ def keep_each(connection: sqlite3.Connection, items, save) -> list[int]:
     saved: list[int] = []
     for item in items:
         connection.execute("SAVEPOINT mensagem")
+        files = begin_files()
         try:
             entry_id = save(item)
         except Exception:
             connection.execute("ROLLBACK TO SAVEPOINT mensagem")
             connection.execute("RELEASE SAVEPOINT mensagem")
+            for path in files:
+                path.unlink(missing_ok=True)
+            end_files()
             continue
         connection.execute("RELEASE SAVEPOINT mensagem")
+        end_files()
         if entry_id is not None:
             saved.append(int(entry_id))
     return saved

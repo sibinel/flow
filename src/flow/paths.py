@@ -4,7 +4,21 @@ from __future__ import annotations
 
 import os
 import sys
+from contextvars import ContextVar
 from pathlib import Path
+
+_attempt_files: ContextVar[list | None] = ContextVar("flow_attempt_files", default=None)
+
+
+def begin_files() -> list:
+    """Lista os arquivos desta mensagem para apagar se ela falhar."""
+    files: list = []
+    _attempt_files.set(files)
+    return files
+
+
+def end_files() -> None:
+    _attempt_files.set(None)
 
 
 def package_dir() -> Path:
@@ -86,6 +100,9 @@ def store_document(
     except Exception:
         target.unlink(missing_ok=True)
         raise
+    attempt = _attempt_files.get()
+    if attempt is not None:
+        attempt.append(target)
     return target
 
 
