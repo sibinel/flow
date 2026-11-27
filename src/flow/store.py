@@ -370,15 +370,10 @@ def ensure_demo(connection: sqlite3.Connection) -> None:
         )
     for nome, tipo, valor, texto in _DEMO_DRAFTS:
         found = connection.execute(
-            "SELECT id, estado FROM rascunho WHERE texto = ?",
+            "SELECT id FROM rascunho WHERE texto = ?",
             (texto,),
         ).fetchone()
         if found:
-            if found["estado"] != "aguardando":
-                connection.execute(
-                    "UPDATE rascunho SET estado = 'aguardando' WHERE id = ?",
-                    (found["id"],),
-                )
             continue
         contact = _contact_id(connection, clients[nome], tipo, valor)
         entry = connection.execute(
@@ -398,27 +393,10 @@ def ensure_demo(connection: sqlite3.Connection) -> None:
         )
     for nome, tipo, valor, texto, motivo in _DEMO_PENDINGS:
         found = connection.execute(
-            "SELECT id, estado FROM entrada WHERE texto = ?",
+            "SELECT id FROM entrada WHERE texto = ?",
             (texto,),
         ).fetchone()
         if found:
-            if found["estado"] != "pendente":
-                connection.execute(
-                    """
-                    UPDATE entrada
-                    SET estado = 'pendente', cliente_id = NULL, processo_id = NULL
-                    WHERE id = ?
-                    """,
-                    (found["id"],),
-                )
-            if not connection.execute(
-                "SELECT 1 FROM pendencia WHERE entrada_id = ? AND motivo = ?",
-                (found["id"], motivo),
-            ).fetchone():
-                connection.execute(
-                    "INSERT INTO pendencia (entrada_id, motivo) VALUES (?, ?)",
-                    (found["id"], motivo),
-                )
             continue
         contact = _contact_id(connection, clients[nome], tipo, valor)
         entry = connection.execute(
