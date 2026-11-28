@@ -47,16 +47,20 @@ class FakeImap:
                     break
                 text = line.decode("utf-8", "replace").strip()
                 tag, _, rest = text.partition(" ")
-                command = rest.split(" ", 1)[0].upper() if rest else ""
+                words = rest.split(" ") if rest else []
+                command = words[0].upper() if words else ""
+                if command == "UID" and len(words) > 1:
+                    command = words[1].upper()
                 self.commands.append(command)
                 if command == "CAPABILITY":
                     file.write(b"* CAPABILITY IMAP4rev1\r\n")
                 elif command in {"SELECT", "EXAMINE"}:
                     file.write(b"* 1 EXISTS\r\n")
+                    file.write(b"* OK [UIDVALIDITY 1] uids\r\n")
                 elif command == "SEARCH":
                     file.write(b"* SEARCH 1\r\n")
                 elif command == "FETCH":
-                    file.write(f"* 1 FETCH (RFC822 {{{len(self._message)}}}\r\n".encode())
+                    file.write(f"* 1 FETCH (UID 1 RFC822 {{{len(self._message)}}}\r\n".encode())
                     file.write(self._message)
                     file.write(b")\r\n")
                 elif command == "LOGOUT":
@@ -174,6 +178,12 @@ class ImapReaderTest(unittest.TestCase):
                 return "OK", [b"0"]
 
             def search(self, charset, criteria):
+                return "OK", [b""]
+
+            def response(self, name: str):
+                return name, [b"5"] if name == "UIDVALIDITY" else [None]
+
+            def uid(self, command: str, *args):
                 return "OK", [b""]
 
         with (
