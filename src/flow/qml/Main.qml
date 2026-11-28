@@ -242,6 +242,7 @@ ApplicationWindow {
                                 required property bool clientsMatch
                                 required property string approvalVersion
                                 required property string state
+                                required property string subject
                                 width: draftsView.width
                                 implicitHeight: Math.max(draftRow.implicitHeight + 20, 64)
                                 radius: 10
@@ -262,6 +263,14 @@ ApplicationWindow {
                                         Layout.fillWidth: true
                                         spacing: 4
 
+                                        Label {
+                                            visible: draftCard.subject !== ""
+                                            text: "Assunto: " + draftCard.subject
+                                            color: "#d6d3d1"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
                                         Label {
                                             text: draftCard.text
                                             color: "#fafaf9"

@@ -70,6 +70,7 @@ class ImapReader:
             has_text=bool(body.strip()),
             has_file=bool(attachments),
             account=self._account,
+            subject=str(message.get("Subject") or ""),
         )
         if entry_id is None:
             return None

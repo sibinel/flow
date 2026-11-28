@@ -292,7 +292,7 @@ class WhatsAppSender:
         )
         if delivery is None:
             return False
-        text, recipient = delivery
+        text, recipient = delivery.text, delivery.recipient
         self._tool = SendTool()
         outcome = self._runner(session, "send", {"to": recipient, "text": text})
         if _not_handed(outcome):

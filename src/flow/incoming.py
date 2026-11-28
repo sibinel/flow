@@ -105,6 +105,7 @@ def open_entry(
     has_file: bool,
     account: str,
     media_failed: bool = False,
+    subject: str = "",
 ) -> int | None:
     """Grava a entrada. Id já visto ou contato pessoal devolve None. Contato sem cliente fica pendente."""
     stored_id = scoped_message_id(kind, value, message_id)
@@ -128,8 +129,8 @@ def open_entry(
         """
         INSERT INTO entrada (
             cliente_id, contato_id, processo_id, recebido_em, texto, estado,
-            mensagem_id, canal, conta
-        ) VALUES (NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
+            mensagem_id, canal, conta, assunto
+        ) VALUES (NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             contact_id,
@@ -139,6 +140,7 @@ def open_entry(
             stored_id or None,
             kind,
             account,
+            " ".join(str(subject or "").split()) or None,
         ),
     ).lastrowid
     saved = int(entry_id)

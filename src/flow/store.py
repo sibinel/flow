@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS entrada (
     estado TEXT NOT NULL CHECK (estado IN ('nova', 'pendente', 'arquivada')),
     mensagem_id TEXT,
     canal TEXT,
-    conta TEXT
+    conta TEXT,
+    assunto TEXT
 );
 
 CREATE TABLE IF NOT EXISTS documento (
@@ -66,7 +67,8 @@ CREATE TABLE IF NOT EXISTS rascunho (
     destino_aprovado TEXT,
     canal_aprovado TEXT,
     cliente_entrada_aprovado INTEGER,
-    cliente_contato_aprovado INTEGER
+    cliente_contato_aprovado INTEGER,
+    assunto_aprovado TEXT
 );
 
 CREATE TABLE IF NOT EXISTS envio (
@@ -218,6 +220,7 @@ def _ensure_approval_columns(connection: sqlite3.Connection) -> None:
         "canal_aprovado": "TEXT",
         "cliente_entrada_aprovado": "INTEGER",
         "cliente_contato_aprovado": "INTEGER",
+        "assunto_aprovado": "TEXT",
     }
     for name, kind in fields.items():
         if name not in columns:
@@ -335,6 +338,53 @@ def _backfill_trechos(connection: sqlite3.Connection) -> None:
         raise
 
 
+def reply_subject(original: str | None) -> str:
+    """Assunto da resposta: "Re: " + o original, sem repetir o "Re:". Sem original, vazio."""
+    subject = " ".join(str(original or "").split())
+    if not subject:
+        return ""
+    if subject.casefold().startswith("re:"):
+        return subject
+    return f"Re: {subject}"
+
+
+def _reset_subjectless_email_approvals(connection: sqlite3.Connection) -> None:
+    """Uma vez, e-mail aprovado antes do assunto congelado volta para revisão."""
+    marker = "email_subject_reset_v1"
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        found = connection.execute(
+            "SELECT 1 FROM store_meta WHERE key = ?",
+            (marker,),
+        ).fetchone()
+        if found is None:
+            connection.execute(
+                """
+                UPDATE rascunho
+                SET estado = 'aguardando',
+                    texto_aprovado = NULL,
+                    destino_aprovado = NULL,
+                    canal_aprovado = NULL,
+                    cliente_entrada_aprovado = NULL,
+                    cliente_contato_aprovado = NULL,
+                    assunto_aprovado = NULL
+                WHERE estado = 'aprovado' AND assunto_aprovado IS NULL
+                  AND (canal_aprovado = 'email' OR (canal_aprovado IS NULL AND EXISTS (
+                      SELECT 1 FROM entrada JOIN contato ON contato.id = entrada.contato_id
+                      WHERE entrada.id = rascunho.entrada_id AND contato.tipo = 'email'
+                  )))
+                """
+            )
+            connection.execute(
+                "INSERT INTO store_meta (key, value) VALUES (?, 'done')",
+                (marker,),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 def _reset_legacy_approvals(connection: sqlite3.Connection) -> None:
     """Uma vez, exige revisão humana para todo aprovado anterior à cópia confiável."""
     marker = "legacy_approved_reset_v1"
@@ -376,6 +426,8 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE entrada ADD COLUMN canal TEXT")
     if "conta" not in columns:
         connection.execute("ALTER TABLE entrada ADD COLUMN conta TEXT")
+    if "assunto" not in columns:
+        connection.execute("ALTER TABLE entrada ADD COLUMN assunto TEXT")
     _scope_existing_messages(connection)
     connection.execute("DROP INDEX IF EXISTS entrada_mensagem_id")
     connection.execute(
@@ -467,6 +519,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
     _ensure_contact_columns(connection)
     connection.commit()
     _reset_legacy_approvals(connection)
+    _reset_subjectless_email_approvals(connection)
     _backfill_trechos(connection)
 
 

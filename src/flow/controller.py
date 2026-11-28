@@ -22,9 +22,14 @@ from flow.paths import ensure_user_data, whatsapp_session
 from flow.send import SmtpSender, load_smtp_target
 from flow.whatsapp import WhatsAppReader, WhatsAppSender, commit_cursor, pair, session_ready
 from flow.queue import RecordModel
-from flow.store import add_entry_trecho, database_file, open_database
+from flow.store import add_entry_trecho, database_file, open_database, reply_subject
 
 _STOPPED = "Leitura e envio de WhatsApp estão parados."
+
+
+def _draft_subject(channel, original) -> str:
+    """Só e-mail tem assunto. É o que a fila mostra e o que a aprovação congela."""
+    return reply_subject(original) if channel == "email" else ""
 
 
 def _approval_fingerprint(row) -> str:
@@ -36,6 +41,7 @@ def _approval_fingerprint(row) -> str:
         str(row["contact_client"] or "sem cliente"),
         row["entry_client_id"],
         row["contact_client_id"],
+        str(row["subject"] or ""),
     )
     payload = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -71,6 +77,7 @@ class Controller(QObject):
                 "clientsMatch",
                 "approvalVersion",
                 "state",
+                "subject",
             ]
         )
         self._pendings = RecordModel(["entryId", "text", "reason", "unowned"])
@@ -251,7 +258,8 @@ class Controller(QObject):
                        entrada.cliente_id AS entry_client_id,
                        contato.cliente_id AS contact_client_id,
                        entry_client.nome AS entry_client,
-                       contact_client.nome AS contact_client
+                       contact_client.nome AS contact_client,
+                       entrada.assunto AS original_subject
                 FROM rascunho
                 JOIN entrada ON entrada.id = rascunho.entrada_id
                 JOIN contato ON contato.id = entrada.contato_id
@@ -261,6 +269,9 @@ class Controller(QObject):
                 """,
                 (draft_id,),
             ).fetchone()
+            if row is not None:
+                row = dict(row)
+                row["subject"] = _draft_subject(row["channel"], row["original_subject"])
             if row is None:
                 self._db.rollback()
                 self._reload()
@@ -287,7 +298,8 @@ class Controller(QObject):
                     destino_aprovado = ?,
                     canal_aprovado = ?,
                     cliente_entrada_aprovado = ?,
-                    cliente_contato_aprovado = ?
+                    cliente_contato_aprovado = ?,
+                    assunto_aprovado = ?
                 WHERE id = ? AND estado = 'aguardando'
                 """,
                 (
@@ -296,6 +308,7 @@ class Controller(QObject):
                     row["channel"],
                     row["entry_client_id"],
                     row["contact_client_id"],
+                    row["subject"],
                     draft_id,
                 ),
             )
@@ -699,7 +712,9 @@ class Controller(QObject):
                    COALESCE(entry_snapshot.nome, entry_live.nome, 'sem cliente')
                        AS entry_client,
                    COALESCE(contact_snapshot.nome, contact_live.nome, 'sem cliente')
-                       AS contact_client
+                       AS contact_client,
+                   entrada.assunto AS original_subject,
+                   rascunho.assunto_aprovado
             FROM rascunho
             JOIN entrada ON entrada.id = rascunho.entrada_id
             JOIN contato ON contato.id = entrada.contato_id
@@ -715,6 +730,10 @@ class Controller(QObject):
         )
         for row in rows:
             draft = dict(row)
+            if row["estado"] == "em curso" and row["assunto_aprovado"] is not None:
+                draft["subject"] = row["assunto_aprovado"]
+            else:
+                draft["subject"] = _draft_subject(row["channel"], row["original_subject"])
             drafts.append(
                 {
                     "draftId": row["id"],
@@ -729,6 +748,7 @@ class Controller(QObject):
                     ),
                     "approvalVersion": _approval_fingerprint(draft),
                     "state": row["estado"],
+                    "subject": draft["subject"],
                 }
             )
         self._drafts.replace(drafts)
