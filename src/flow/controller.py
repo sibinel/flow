@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -118,8 +119,10 @@ class Controller(QObject):
                     lambda draft_id, channel: self._dispatch_approved(draft_id, channel, db),
                     lambda: self._collect(db),
                 )
-            except Exception:
-                db.rollback()
+            except Exception as exc:
+                if db.in_transaction:
+                    db.rollback()
+                publish_notice(self._data_dir, f"O ciclo falhou: {exc}")
         finally:
             db.close()
             self.backgroundDone.emit()
@@ -301,6 +304,14 @@ class Controller(QObject):
                 self._reload()
                 return False
             self._db.commit()
+        except sqlite3.OperationalError as exc:
+            if self._db.in_transaction:
+                self._db.rollback()
+            if "locked" not in str(exc) and "busy" not in str(exc):
+                raise
+            publish_notice(self._data_dir, "O banco está ocupado; tente aprovar de novo.")
+            self._reload()
+            return False
         except Exception:
             if self._db.in_transaction:
                 self._db.rollback()

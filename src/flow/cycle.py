@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -34,7 +36,8 @@ class CycleConfig:
                 raise ValueError("horário inválido")
 
     def slots(self) -> tuple[str, ...]:
-        return self.times[: self.quantity]
+        """Os primeiros horários configurados, em ordem do dia e sem repetir."""
+        return tuple(sorted(set(self.times[: self.quantity])))
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,22 @@ def save_config(data_dir: Path, config: CycleConfig, ultimo: str | None = None) 
         payload["ultimo"] = ultimo
     elif current.get("ultimo"):
         payload["ultimo"] = current["ultimo"]
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if payload == current:
+        return
+    _write_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Grava inteiro ou não grava: uma queda no meio não deixa o arquivo pela metade."""
+    temporary = path.with_name(f".{path.name}-{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as file:
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class DayCycle:
@@ -156,6 +174,8 @@ class DayCycle:
         for entry_id in self._due(now):
             if Classifier(ReadTool(self._db)).classify(entry_id) == "arquivada":
                 archived.append(entry_id)
+        # A classificação fica gravada antes da rede: o modelo não segura o banco.
+        self._db.commit()
         for entry_id in archived:
             self._followup(entry_id)
         return self._send_approved(now, dispatch)
@@ -207,6 +227,8 @@ class DayCycle:
         ).fetchone()
         if entry is None or entry["cliente_id"] is None:
             return
+        if self._db.in_transaction:
+            self._db.commit()
         try:
             draft = CloudLLM(self._db, api_key=load_model_key(self._data_dir)).complete(
                 "rascunho",
@@ -220,6 +242,7 @@ class DayCycle:
                 "UPDATE entrada SET estado = 'nova' WHERE id = ?",
                 (entry_id,),
             )
+            self._db.commit()
             return
         text = draft.strip()
         if not text:
@@ -227,10 +250,14 @@ class DayCycle:
         self._db.execute(
             """
             INSERT INTO rascunho (entrada_id, texto, estado)
-            VALUES (?, ?, 'aguardando')
+            SELECT ?, ?, 'aguardando'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM rascunho WHERE entrada_id = ? AND estado = 'aguardando'
+            )
             """,
-            (entry_id, text),
+            (entry_id, text, entry_id),
         )
+        self._db.commit()
 
     def _send_approved(self, now: datetime, dispatch) -> list[int]:
         if dispatch is None:

@@ -190,10 +190,14 @@ class FlowConnection(sqlite3.Connection):
         self._flow_closed = True
 
 
+# Quanto uma conexão espera a outra soltar a escrita antes de desistir, em segundos.
+BUSY_TIMEOUT = 10.0
+
+
 def open_database(data_dir: Path) -> sqlite3.Connection:
     """Cria o arquivo e o esquema se faltarem. Não apaga linhas existentes."""
     path = database_file(data_dir)
-    connection = sqlite3.connect(path, factory=FlowConnection)
+    connection = sqlite3.connect(path, factory=FlowConnection, timeout=BUSY_TIMEOUT)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
