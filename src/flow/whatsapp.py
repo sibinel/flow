@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from flow.incoming import IngestResult, already_stored, keep_each, open_entry, scoped_message_id
+from flow.notice import publish_notice
 from flow.paths import package_dir, store_document, whatsapp_session
 from flow.send import (
     SendTool,
@@ -297,6 +298,12 @@ class WhatsAppSender:
         if _not_handed(outcome):
             self._tool = None
             release_draft(self._db, draft_id)
+            if isinstance(outcome, dict) and outcome.get("error") == "not_on_whatsapp":
+                publish_notice(
+                    self._data_dir,
+                    f"WhatsApp: o número {recipient} não está no WhatsApp; "
+                    "o rascunho continua aprovado.",
+                )
             return False
         if not _was_sent(outcome):
             self._tool = None

@@ -66,12 +66,14 @@ def contact_for(connection: sqlite3.Connection, kind: str, value: str) -> tuple[
     else:
         digits = _digits(value)
         row = None
-        for item in connection.execute(
-            "SELECT id, cliente_id, valor FROM contato WHERE tipo = 'whatsapp'"
-        ):
-            if digits and _digits(item["valor"]) == digits:
-                row = item
-                break
+        if digits:
+            rows = connection.execute(
+                "SELECT id, cliente_id, valor FROM contato WHERE tipo = 'whatsapp' ORDER BY id"
+            ).fetchall()
+            # O número igual ganha do equivalente sem ou com o nono dígito.
+            row = next((item for item in rows if _digits(item["valor"]) == digits), None)
+            if row is None:
+                row = next((item for item in rows if same_phone(item["valor"], digits)), None)
         stored = f"+{digits}" if digits else value.strip()
     if row is not None:
         return int(row["id"]), row["cliente_id"] is not None
@@ -194,6 +196,28 @@ def keep_each(connection: sqlite3.Connection, items, save) -> IngestResult:
         else:
             saved.duplicates += 1
     return saved
+
+
+def phone_variants(value: str) -> set[str]:
+    """Os dígitos do número e, no celular brasileiro, a forma com e sem o nono dígito.
+
+    Contas antigas do WhatsApp aparecem como 55 + DDD + 8 dígitos; o cadastro costuma
+    ter 55 + DDD + 9 + 8 dígitos. Fixo (começa com 2 a 5) e outros países não mudam.
+    """
+    digits = _digits(value)
+    if not digits:
+        return set()
+    found = {digits}
+    if digits.startswith("55") and digits[2] != "0" and digits[3] != "0":
+        if len(digits) == 13 and digits[4] == "9" and digits[5] in "6789":
+            found.add(digits[:4] + digits[5:])
+        elif len(digits) == 12 and digits[4] in "6789":
+            found.add(digits[:4] + "9" + digits[4:])
+    return found
+
+
+def same_phone(left: str, right: str) -> bool:
+    return bool(phone_variants(left) & phone_variants(right))
 
 
 def _digits(value: str) -> str:
