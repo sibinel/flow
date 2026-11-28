@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Um processo. .app no macOS, .exe no Windows. Sem assinatura e sem instalador."""
+"""Um processo. .app no macOS, .exe no Windows. Sem assinatura e sem instalador.
+
+O Node e os pacotes da ponte do WhatsApp vão dentro do pacote. Gere com
+scripts/build_app.sh, que baixa o Node em build/node-runtime e roda npm ci.
+"""
 
 import sys
 from pathlib import Path
@@ -7,15 +11,23 @@ from pathlib import Path
 root = Path(SPECPATH)
 qml = root / "src" / "flow" / "qml"
 baileys = root / "src" / "flow" / "baileys"
+windows = sys.platform == "win32"
+node_runtime = root / "build" / "node-runtime"
+node_exe = node_runtime / ("node.exe" if windows else "bin/node")
+node_modules = baileys / "node_modules"
+for required in (node_exe, node_modules / "@whiskeysockets" / "baileys"):
+    if not required.exists():
+        raise SystemExit(f"falta {required}; gere o pacote com scripts/build_app.sh")
 
 a = Analysis(
     [str(root / "src" / "flow" / "__main__.py")],
     pathex=[str(root / "src")],
-    binaries=[],
+    binaries=[(str(node_exe), "flow/node" if windows else "flow/node/bin")],
     datas=[
         (str(qml), "flow/qml"),
         (str(baileys / "bridge.mjs"), "flow/baileys"),
         (str(baileys / "package.json"), "flow/baileys"),
+        (str(node_modules), "flow/baileys/node_modules"),
     ],
     hiddenimports=[
         "flow.window",

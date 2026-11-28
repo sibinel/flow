@@ -10,5 +10,5 @@ if [ ! -x "$node_home/bin/node" ]; then
 fi
 
 export PATH="$node_home/bin:$PATH"
-(cd src/flow/baileys && npm install)
+(cd src/flow/baileys && npm ci)
 exec uv run python -m flow

@@ -335,9 +335,12 @@ def invoke(session: Path, op: str, payload: dict | None = None) -> dict:
         )
     _guard(session)
     script = _bridge_script()
-    node = shutil.which("node")
+    node = node_executable(session.parent)
     if node is None:
-        raise RuntimeError("o WhatsApp pela sessão Web precisa do Node")
+        raise RuntimeError(
+            "o WhatsApp pela sessão Web precisa do Node; reinstale o Flow "
+            "ou rode node-install.sh"
+        )
     body = {"op": op, "session": str(session), **(payload or {})}
     completed = subprocess.run(
         [node, str(script)],
@@ -384,6 +387,28 @@ def _guard(session: Path) -> None:
         raise ValueError("a sessão do WhatsApp não pode ficar na pasta de documentos")
     if resolved == pkg or pkg in resolved.parents:
         raise ValueError("a sessão do WhatsApp não pode ficar dentro do pacote")
+
+
+def _node_relative() -> Path:
+    if sys.platform == "win32":
+        return Path("node.exe")
+    return Path("bin") / "node"
+
+
+def node_executable(data_dir: Path) -> str | None:
+    """Node embutido no pacote, depois o da pasta do usuário, depois o do PATH.
+
+    O .app aberto pelo Finder não herda o PATH do terminal, por isso o PATH é o último.
+    """
+    relative = _node_relative()
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(getattr(sys, "_MEIPASS")) / "flow" / "node" / relative)
+    candidates.append(Path(data_dir) / "node" / relative)
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return shutil.which("node")
 
 
 def _bridge_script() -> Path:
