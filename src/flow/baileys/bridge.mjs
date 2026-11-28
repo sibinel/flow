@@ -405,6 +405,28 @@ async function readMessages(folder) {
   return { messages: applyCursor(cursor, messages, overlap), warnings }
 }
 
+// Mesmo critério de flow/incoming.py: celular brasileiro com e sem o nono dígito.
+function phoneVariants(digits) {
+  const found = [digits]
+  if (digits.startsWith('55') && digits[2] !== '0' && digits[3] !== '0') {
+    if (digits.length === 13 && digits[4] === '9' && '6789'.includes(digits[5])) {
+      found.push(digits.slice(0, 4) + digits.slice(5))
+    } else if (digits.length === 12 && '6789'.includes(digits[4])) {
+      found.push(digits.slice(0, 4) + '9' + digits.slice(4))
+    }
+  }
+  return found
+}
+
+async function resolveJid(sock, digits) {
+  for (const candidate of phoneVariants(digits)) {
+    const found = await sock.onWhatsApp(`${candidate}@s.whatsapp.net`)
+    const hit = (found || []).find((item) => item && item.exists && item.jid)
+    if (hit) return hit.jid
+  }
+  return null
+}
+
 async function sendMessage(folder) {
   const digits = String(request.to || '').replace(/\D/g, '')
   if (!digits) return { sent: false, handed: false }
@@ -415,8 +437,19 @@ async function sendMessage(folder) {
     if (error && error.code === 'qr') throw error
     return { sent: false, handed: false }
   }
+  let jid
   try {
-    await sock.sendMessage(`${digits}@s.whatsapp.net`, { text: String(request.text || '') })
+    jid = await resolveJid(sock, digits)
+  } catch {
+    end(sock)
+    return { sent: false, handed: false }
+  }
+  if (!jid) {
+    end(sock)
+    return { sent: false, handed: false, error: 'not_on_whatsapp' }
+  }
+  try {
+    await sock.sendMessage(jid, { text: String(request.text || '') })
   } catch {
     end(sock)
     return { sent: false, handed: true }

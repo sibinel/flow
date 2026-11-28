@@ -9,12 +9,26 @@ import smtplib
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
+from typing import NamedTuple
 
 from flow.mail import _number, _read_mail_file, verified_context
+from flow.store import add_sent_trecho
 
 
 class SendTool:
     name = "envio"
+
+
+class Delivery(NamedTuple):
+    """A cópia aprovada, reservada para sair. `reply_to` é o Message-ID respondido."""
+
+    text: str
+    recipient: str
+    subject: str = ""
+    reply_to: str = ""
+
+
+_MESSAGE_ID = re.compile(r"<[^<>@\s]+@[^<>@\s]+>")
 
 
 class SmtpSender:
@@ -32,9 +46,17 @@ class SmtpSender:
         delivery = reserve_delivery(self._db, draft_id, "email", _single_email_recipient)
         if delivery is None:
             return False
-        text, recipient = delivery
         self._tool = SendTool()
-        delivered = _deliver(host, port, sender, recipient, text, password)
+        delivered = _deliver(
+            host,
+            port,
+            sender,
+            delivery.recipient,
+            delivery.text,
+            password,
+            delivery.subject,
+            delivery.reply_to,
+        )
         if delivered is False:
             self._tool = None
             release_draft(self._db, draft_id)
@@ -48,7 +70,7 @@ def reserve_delivery(
     draft_id: int,
     channel: str,
     valid_recipient,
-) -> tuple[str, str] | None:
+) -> Delivery | None:
     """Lê a cópia e a reserva sob o mesmo bloqueio de escrita."""
     connection.commit()
     connection.execute("BEGIN IMMEDIATE")
@@ -62,6 +84,9 @@ def reserve_delivery(
                    rascunho.destino_aprovado, rascunho.canal_aprovado,
                    rascunho.cliente_entrada_aprovado,
                    rascunho.cliente_contato_aprovado,
+                   rascunho.assunto_aprovado,
+                   entrada.mensagem_id AS entrada_mensagem,
+                   entrada.canal AS entrada_canal,
                    entrada.cliente_id AS entrada_cliente,
                    contato.cliente_id AS contato_cliente,
                    contato.tipo AS contato_tipo
@@ -101,7 +126,12 @@ def reserve_delivery(
             connection.rollback()
             return None
         connection.commit()
-        return text, recipient
+        subject = str(row["assunto_aprovado"] or "") if channel == "email" else ""
+        reply_to = ""
+        if channel == "email" and row["entrada_canal"] in (None, "email"):
+            found = _MESSAGE_ID.fullmatch(str(row["entrada_mensagem"] or "").strip())
+            reply_to = found.group(0) if found else ""
+        return Delivery(text, recipient, subject, reply_to)
     except Exception:
         if connection.in_transaction:
             connection.rollback()
@@ -134,6 +164,7 @@ def record_delivery(connection: sqlite3.Connection, draft_id: int, channel: str)
         "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
         (draft_id,),
     )
+    add_sent_trecho(connection, draft_id, sent_at)
     connection.commit()
 
 
@@ -148,13 +179,26 @@ def _close_smtp(smtp) -> None:
 
 
 def _deliver(
-    host: str, port: int, sender: str, recipient: str, body: str, password: str
+    host: str,
+    port: int,
+    sender: str,
+    recipient: str,
+    body: str,
+    password: str,
+    subject: str = "",
+    reply_to: str = "",
 ) -> bool:
     """Falha ao abrir ou entrar devolve falso. Falha depois do envio sobe."""
     try:
         message = EmailMessage()
         message["From"] = sender
         message["To"] = recipient
+        if subject:
+            message["Subject"] = subject
+        if reply_to:
+            # Respondendo na mesma conversa do cliente.
+            message["In-Reply-To"] = reply_to
+            message["References"] = reply_to
         message.set_content(body)
     except Exception:
         return False
@@ -238,8 +282,25 @@ def load_smtp_target(data_dir: Path) -> tuple[str, int] | None:
     return host.strip(), port
 
 
+STARTTLS_PORT = 587
+
+
 def _smtp(host: str, port: int):
-    """Em loopback o teste fala SMTP em claro. Fora dele a conexão já nasce cifrada."""
+    """Em loopback o teste fala SMTP em claro. Fora dele, nunca há login sem cifra.
+
+    Na porta 587 a conexão sobe com STARTTLS antes do login; nas outras, já nasce
+    cifrada (SSL direto, como na 465).
+    """
     if host == "127.0.0.1":
         return smtplib.SMTP(host, port, timeout=5)
+    if port == STARTTLS_PORT:
+        smtp = smtplib.SMTP(host, port, timeout=5)
+        try:
+            smtp.ehlo()
+            smtp.starttls(context=verified_context())
+            smtp.ehlo()
+        except Exception:
+            _close_smtp(smtp)
+            raise
+        return smtp
     return smtplib.SMTP_SSL(host, port, timeout=5, context=verified_context())

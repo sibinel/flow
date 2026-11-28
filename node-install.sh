@@ -1,5 +1,6 @@
 #!/bin/bash
 # Instala o Node LTS numa pasta só do Flow, sem instalador e sem Homebrew.
+# Uso: ./node-install.sh [pasta absoluta]. Sem pasta, vai para a pasta de dados do Flow.
 set -euo pipefail
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -7,7 +8,14 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-node_home="$HOME/Library/Application Support/Flow/node"
+node_home="${1:-$HOME/Library/Application Support/Flow/node}"
+case "$node_home" in
+  /?*) ;;
+  *)
+    echo "A pasta do Node precisa ser um caminho absoluto: $node_home"
+    exit 1
+    ;;
+esac
 cpu="$(uname -m)"
 case "$cpu" in
   arm64) cpu="arm64" ;;

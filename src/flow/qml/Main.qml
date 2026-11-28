@@ -13,6 +13,7 @@ ApplicationWindow {
     color: "#141210"
 
     property int selectedEntry: -1
+    property bool selectedUnowned: false
 
     function processChoice() {
         if (processes.currentIndex < 0 || processes.currentValue === undefined)
@@ -241,6 +242,7 @@ ApplicationWindow {
                                 required property bool clientsMatch
                                 required property string approvalVersion
                                 required property string state
+                                required property string subject
                                 width: draftsView.width
                                 implicitHeight: Math.max(draftRow.implicitHeight + 20, 64)
                                 radius: 10
@@ -261,6 +263,14 @@ ApplicationWindow {
                                         Layout.fillWidth: true
                                         spacing: 4
 
+                                        Label {
+                                            visible: draftCard.subject !== ""
+                                            text: "Assunto: " + draftCard.subject
+                                            color: "#d6d3d1"
+                                            font.pixelSize: 13
+                                            wrapMode: Text.WordWrap
+                                            Layout.fillWidth: true
+                                        }
                                         Label {
                                             text: draftCard.text
                                             color: "#fafaf9"
@@ -410,6 +420,7 @@ ApplicationWindow {
                                 required property int entryId
                                 required property string text
                                 required property string reason
+                                required property bool unowned
                                 width: pendingsView.width
                                 implicitHeight: Math.max(pendingText.implicitHeight + 24, 64)
                                 radius: 10
@@ -447,7 +458,10 @@ ApplicationWindow {
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: window.selectedEntry = entryId
+                                    onClicked: {
+                                        window.selectedEntry = entryId
+                                        window.selectedUnowned = unowned
+                                    }
                                 }
                             }
                         }
@@ -516,8 +530,83 @@ ApplicationWindow {
                                     window.selectedEntry = -1
                             }
                         }
+
+                        Label {
+                            text: "Novo cliente"
+                            color: "#d6d3d1"
+                            font.pixelSize: 13
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            TextField {
+                                id: newClientName
+                                Layout.fillWidth: true
+                                placeholderText: "Nome"
+                                color: "#fafaf9"
+                                font.pixelSize: 14
+                                implicitHeight: 40
+                                leftPadding: 12
+                                rightPadding: 12
+                                background: Rectangle {
+                                    radius: 8
+                                    color: "#292524"
+                                    border.color: "#44403c"
+                                }
+                            }
+                            ComboBox {
+                                id: newClientStatus
+                                implicitHeight: 40
+                                font.pixelSize: 14
+                                model: ["cliente", "prospecção"]
+                            }
+                            Button {
+                                text: "Criar"
+                                implicitHeight: 40
+                                font.pixelSize: 14
+                                font.capitalization: Font.MixedCase
+                                enabled: newClientName.text.trim() !== ""
+                                onClicked: {
+                                    var created = controller.createClient(newClientName.text, newClientStatus.currentText)
+                                    if (created > 0) {
+                                        newClientName.text = ""
+                                        clients.currentIndex = clients.indexOfValue(created)
+                                    }
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: "Pessoal: apagar e ignorar este contato"
+                            Layout.fillWidth: true
+                            implicitHeight: 40
+                            font.pixelSize: 14
+                            font.capitalization: Font.MixedCase
+                            enabled: window.selectedEntry >= 0 && window.selectedUnowned
+                            onClicked: personalDialog.open()
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    Dialog {
+        id: personalDialog
+        anchors.centerIn: parent
+        modal: true
+        title: "Marcar como pessoal"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        Label {
+            width: 360
+            wrapMode: Text.WordWrap
+            text: "As entradas pendentes deste contato e os anexos delas serão apagados. As próximas mensagens dele não entram no flow."
+        }
+        onAccepted: {
+            if (controller.markPersonal(window.selectedEntry)) {
+                window.selectedEntry = -1
+                window.selectedUnowned = false
             }
         }
     }

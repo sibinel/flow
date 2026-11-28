@@ -6,6 +6,8 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
+from flow.store import add_entry_trecho
+
 _INTRO = re.compile(
     r"(?i)\b(?:sou|aqui é|meu nome é)\s+(?:a|o|uma|um)?\s*([a-zà-ÿ]{2,})"
 )
@@ -93,6 +95,7 @@ class Classifier:
                 (client.id, cited[0], entry_id),
             )
             self.read._db.execute("DELETE FROM pendencia WHERE entrada_id = ?", (entry_id,))
+            add_entry_trecho(self.read._db, entry_id)
             return "arquivada"
 
         self.read._db.execute(

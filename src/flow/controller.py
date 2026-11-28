@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -21,9 +22,14 @@ from flow.paths import ensure_user_data, whatsapp_session
 from flow.send import SmtpSender, load_smtp_target
 from flow.whatsapp import WhatsAppReader, WhatsAppSender, commit_cursor, pair, session_ready
 from flow.queue import RecordModel
-from flow.store import database_file, open_database
+from flow.store import add_entry_trecho, database_file, open_database, reply_subject
 
 _STOPPED = "Leitura e envio de WhatsApp estão parados."
+
+
+def _draft_subject(channel, original) -> str:
+    """Só e-mail tem assunto. É o que a fila mostra e o que a aprovação congela."""
+    return reply_subject(original) if channel == "email" else ""
 
 
 def _approval_fingerprint(row) -> str:
@@ -35,6 +41,7 @@ def _approval_fingerprint(row) -> str:
         str(row["contact_client"] or "sem cliente"),
         row["entry_client_id"],
         row["contact_client_id"],
+        str(row["subject"] or ""),
     )
     payload = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -70,9 +77,10 @@ class Controller(QObject):
                 "clientsMatch",
                 "approvalVersion",
                 "state",
+                "subject",
             ]
         )
-        self._pendings = RecordModel(["entryId", "text", "reason"])
+        self._pendings = RecordModel(["entryId", "text", "reason", "unowned"])
         self._clients = RecordModel(["clientId", "name"])
         self._processes = RecordModel(["processId", "label"])
         self._search_candidates = RecordModel(["clientId", "name"])
@@ -118,8 +126,10 @@ class Controller(QObject):
                     lambda draft_id, channel: self._dispatch_approved(draft_id, channel, db),
                     lambda: self._collect(db),
                 )
-            except Exception:
-                db.rollback()
+            except Exception as exc:
+                if db.in_transaction:
+                    db.rollback()
+                publish_notice(self._data_dir, f"O ciclo falhou: {exc}")
         finally:
             db.close()
             self.backgroundDone.emit()
@@ -248,7 +258,8 @@ class Controller(QObject):
                        entrada.cliente_id AS entry_client_id,
                        contato.cliente_id AS contact_client_id,
                        entry_client.nome AS entry_client,
-                       contact_client.nome AS contact_client
+                       contact_client.nome AS contact_client,
+                       entrada.assunto AS original_subject
                 FROM rascunho
                 JOIN entrada ON entrada.id = rascunho.entrada_id
                 JOIN contato ON contato.id = entrada.contato_id
@@ -258,6 +269,9 @@ class Controller(QObject):
                 """,
                 (draft_id,),
             ).fetchone()
+            if row is not None:
+                row = dict(row)
+                row["subject"] = _draft_subject(row["channel"], row["original_subject"])
             if row is None:
                 self._db.rollback()
                 self._reload()
@@ -284,7 +298,8 @@ class Controller(QObject):
                     destino_aprovado = ?,
                     canal_aprovado = ?,
                     cliente_entrada_aprovado = ?,
-                    cliente_contato_aprovado = ?
+                    cliente_contato_aprovado = ?,
+                    assunto_aprovado = ?
                 WHERE id = ? AND estado = 'aguardando'
                 """,
                 (
@@ -293,6 +308,7 @@ class Controller(QObject):
                     row["channel"],
                     row["entry_client_id"],
                     row["contact_client_id"],
+                    row["subject"],
                     draft_id,
                 ),
             )
@@ -301,6 +317,14 @@ class Controller(QObject):
                 self._reload()
                 return False
             self._db.commit()
+        except sqlite3.OperationalError as exc:
+            if self._db.in_transaction:
+                self._db.rollback()
+            if "locked" not in str(exc) and "busy" not in str(exc):
+                raise
+            publish_notice(self._data_dir, "O banco está ocupado; tente aprovar de novo.")
+            self._reload()
+            return False
         except Exception:
             if self._db.in_transaction:
                 self._db.rollback()
@@ -342,7 +366,105 @@ class Controller(QObject):
         if changed.rowcount != 1:
             self._db.rollback()
             return False
+        # Contato sem dono passa a ser do cliente indicado. Contato com dono não muda.
+        self._db.execute(
+            """
+            UPDATE contato SET cliente_id = ?
+            WHERE cliente_id IS NULL
+              AND id = (SELECT contato_id FROM entrada WHERE id = ?)
+            """,
+            (client_id, entry_id),
+        )
+        add_entry_trecho(self._db, entry_id)
         self._db.commit()
+        self._reload()
+        return True
+
+    @Slot(str, str, result=int)
+    def createClient(self, name: str, status: str) -> int:  # noqa: N802
+        """Cria cliente ou prospecção. Devolve o id, ou 0 se o dado não serve."""
+        nome = " ".join(str(name or "").split())
+        if not nome or status not in {"cliente", "prospecção"}:
+            return 0
+        created = self._db.execute(
+            "INSERT INTO cliente (nome, status) VALUES (?, ?)",
+            (nome, status),
+        ).lastrowid
+        self._db.commit()
+        self._reload()
+        return int(created)
+
+    @Slot(int, result=bool)
+    def markPersonal(self, entry_id: int) -> bool:  # noqa: N802
+        """Marca o contato sem dono como pessoal e apaga as entradas pendentes dele."""
+        docs = (self._data_dir / "documentos").resolve()
+        try:
+            self._db.execute("BEGIN IMMEDIATE")
+            row = self._db.execute(
+                """
+                SELECT contato.id AS contact_id, contato.cliente_id
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = ? AND entrada.estado = 'pendente'
+                """,
+                (entry_id,),
+            ).fetchone()
+            if row is None or row["cliente_id"] is not None:
+                self._db.rollback()
+                return False
+            contact_id = int(row["contact_id"])
+            entries = [
+                int(item["id"])
+                for item in self._db.execute(
+                    "SELECT id FROM entrada WHERE contato_id = ? AND estado = 'pendente'",
+                    (contact_id,),
+                )
+            ]
+            marks = ",".join("?" for _ in entries)
+            blocked = self._db.execute(
+                f"""
+                SELECT 1 FROM rascunho
+                WHERE entrada_id IN ({marks})
+                  AND (estado != 'aguardando'
+                       OR EXISTS (SELECT 1 FROM envio WHERE envio.rascunho_id = rascunho.id))
+                LIMIT 1
+                """,
+                entries,
+            ).fetchone()
+            if blocked is not None:
+                self._db.rollback()
+                publish_notice(
+                    self._data_dir,
+                    "Esse contato tem rascunho aprovado ou enviado; não foi marcado como pessoal.",
+                )
+                self._reload()
+                return False
+            paths = [
+                str(item["caminho"])
+                for item in self._db.execute(
+                    f"SELECT caminho FROM documento WHERE entrada_id IN ({marks})",
+                    entries,
+                )
+            ]
+            for table in ("rascunho", "trecho", "documento", "pendencia"):
+                self._db.execute(
+                    f"DELETE FROM {table} WHERE entrada_id IN ({marks})",
+                    entries,
+                )
+            self._db.execute(f"DELETE FROM entrada WHERE id IN ({marks})", entries)
+            self._db.execute("UPDATE contato SET pessoal = 1 WHERE id = ?", (contact_id,))
+            self._db.commit()
+        except Exception:
+            if self._db.in_transaction:
+                self._db.rollback()
+            raise
+        for raw in paths:
+            path = Path(raw).resolve()
+            if docs in path.parents:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         self._reload()
         return True
 
@@ -590,7 +712,9 @@ class Controller(QObject):
                    COALESCE(entry_snapshot.nome, entry_live.nome, 'sem cliente')
                        AS entry_client,
                    COALESCE(contact_snapshot.nome, contact_live.nome, 'sem cliente')
-                       AS contact_client
+                       AS contact_client,
+                   entrada.assunto AS original_subject,
+                   rascunho.assunto_aprovado
             FROM rascunho
             JOIN entrada ON entrada.id = rascunho.entrada_id
             JOIN contato ON contato.id = entrada.contato_id
@@ -606,6 +730,10 @@ class Controller(QObject):
         )
         for row in rows:
             draft = dict(row)
+            if row["estado"] == "em curso" and row["assunto_aprovado"] is not None:
+                draft["subject"] = row["assunto_aprovado"]
+            else:
+                draft["subject"] = _draft_subject(row["channel"], row["original_subject"])
             drafts.append(
                 {
                     "draftId": row["id"],
@@ -620,6 +748,7 @@ class Controller(QObject):
                     ),
                     "approvalVersion": _approval_fingerprint(draft),
                     "state": row["estado"],
+                    "subject": draft["subject"],
                 }
             )
         self._drafts.replace(drafts)
@@ -629,11 +758,13 @@ class Controller(QObject):
                     "entryId": row["id"],
                     "text": row["texto"],
                     "reason": row["motivo"] or "",
+                    "unowned": row["cliente_id"] is None,
                 }
                 for row in self._db.execute(
                     """
-                    SELECT entrada.id, entrada.texto, pendencia.motivo
+                    SELECT entrada.id, entrada.texto, pendencia.motivo, contato.cliente_id
                     FROM entrada
+                    JOIN contato ON contato.id = entrada.contato_id
                     LEFT JOIN pendencia ON pendencia.id = (
                         SELECT id FROM pendencia
                         WHERE entrada_id = entrada.id ORDER BY id LIMIT 1

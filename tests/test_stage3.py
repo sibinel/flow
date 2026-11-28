@@ -222,6 +222,8 @@ class WindowCallsOnlyTheControllerTest(unittest.TestCase):
             <= {
                 "approve",
                 "indicate",
+                "createClient",
+                "markPersonal",
                 "selectClient",
                 "search",
                 "searchCandidates",
