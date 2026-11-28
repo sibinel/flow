@@ -72,7 +72,7 @@ class Controller(QObject):
                 "state",
             ]
         )
-        self._pendings = RecordModel(["entryId", "text", "reason"])
+        self._pendings = RecordModel(["entryId", "text", "reason", "unowned"])
         self._clients = RecordModel(["clientId", "name"])
         self._processes = RecordModel(["processId", "label"])
         self._search_candidates = RecordModel(["clientId", "name"])
@@ -342,7 +342,104 @@ class Controller(QObject):
         if changed.rowcount != 1:
             self._db.rollback()
             return False
+        # Contato sem dono passa a ser do cliente indicado. Contato com dono não muda.
+        self._db.execute(
+            """
+            UPDATE contato SET cliente_id = ?
+            WHERE cliente_id IS NULL
+              AND id = (SELECT contato_id FROM entrada WHERE id = ?)
+            """,
+            (client_id, entry_id),
+        )
         self._db.commit()
+        self._reload()
+        return True
+
+    @Slot(str, str, result=int)
+    def createClient(self, name: str, status: str) -> int:  # noqa: N802
+        """Cria cliente ou prospecção. Devolve o id, ou 0 se o dado não serve."""
+        nome = " ".join(str(name or "").split())
+        if not nome or status not in {"cliente", "prospecção"}:
+            return 0
+        created = self._db.execute(
+            "INSERT INTO cliente (nome, status) VALUES (?, ?)",
+            (nome, status),
+        ).lastrowid
+        self._db.commit()
+        self._reload()
+        return int(created)
+
+    @Slot(int, result=bool)
+    def markPersonal(self, entry_id: int) -> bool:  # noqa: N802
+        """Marca o contato sem dono como pessoal e apaga as entradas pendentes dele."""
+        docs = (self._data_dir / "documentos").resolve()
+        try:
+            self._db.execute("BEGIN IMMEDIATE")
+            row = self._db.execute(
+                """
+                SELECT contato.id AS contact_id, contato.cliente_id
+                FROM entrada
+                JOIN contato ON contato.id = entrada.contato_id
+                WHERE entrada.id = ? AND entrada.estado = 'pendente'
+                """,
+                (entry_id,),
+            ).fetchone()
+            if row is None or row["cliente_id"] is not None:
+                self._db.rollback()
+                return False
+            contact_id = int(row["contact_id"])
+            entries = [
+                int(item["id"])
+                for item in self._db.execute(
+                    "SELECT id FROM entrada WHERE contato_id = ? AND estado = 'pendente'",
+                    (contact_id,),
+                )
+            ]
+            marks = ",".join("?" for _ in entries)
+            blocked = self._db.execute(
+                f"""
+                SELECT 1 FROM rascunho
+                WHERE entrada_id IN ({marks})
+                  AND (estado != 'aguardando'
+                       OR EXISTS (SELECT 1 FROM envio WHERE envio.rascunho_id = rascunho.id))
+                LIMIT 1
+                """,
+                entries,
+            ).fetchone()
+            if blocked is not None:
+                self._db.rollback()
+                publish_notice(
+                    self._data_dir,
+                    "Esse contato tem rascunho aprovado ou enviado; não foi marcado como pessoal.",
+                )
+                self._reload()
+                return False
+            paths = [
+                str(item["caminho"])
+                for item in self._db.execute(
+                    f"SELECT caminho FROM documento WHERE entrada_id IN ({marks})",
+                    entries,
+                )
+            ]
+            for table in ("rascunho", "trecho", "documento", "pendencia"):
+                self._db.execute(
+                    f"DELETE FROM {table} WHERE entrada_id IN ({marks})",
+                    entries,
+                )
+            self._db.execute(f"DELETE FROM entrada WHERE id IN ({marks})", entries)
+            self._db.execute("UPDATE contato SET pessoal = 1 WHERE id = ?", (contact_id,))
+            self._db.commit()
+        except Exception:
+            if self._db.in_transaction:
+                self._db.rollback()
+            raise
+        for raw in paths:
+            path = Path(raw).resolve()
+            if docs in path.parents:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         self._reload()
         return True
 
@@ -629,11 +726,13 @@ class Controller(QObject):
                     "entryId": row["id"],
                     "text": row["texto"],
                     "reason": row["motivo"] or "",
+                    "unowned": row["cliente_id"] is None,
                 }
                 for row in self._db.execute(
                     """
-                    SELECT entrada.id, entrada.texto, pendencia.motivo
+                    SELECT entrada.id, entrada.texto, pendencia.motivo, contato.cliente_id
                     FROM entrada
+                    JOIN contato ON contato.id = entrada.contato_id
                     LEFT JOIN pendencia ON pendencia.id = (
                         SELECT id FROM pendencia
                         WHERE entrada_id = entrada.id ORDER BY id LIMIT 1

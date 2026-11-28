@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS contato (
     id INTEGER PRIMARY KEY,
     cliente_id INTEGER REFERENCES cliente(id),
     tipo TEXT NOT NULL CHECK (tipo IN ('whatsapp', 'email')),
-    valor TEXT NOT NULL
+    valor TEXT NOT NULL,
+    pessoal INTEGER NOT NULL DEFAULT 0 CHECK (pessoal IN (0, 1))
 );
 
 CREATE TABLE IF NOT EXISTS processo (
@@ -219,6 +220,16 @@ def _ensure_approval_columns(connection: sqlite3.Connection) -> None:
             connection.execute(f"ALTER TABLE rascunho ADD COLUMN {name} {kind}")
 
 
+def _ensure_contact_columns(connection: sqlite3.Connection) -> None:
+    """Acrescenta a marca de contato pessoal. Todo contato antigo começa como não pessoal."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(contato)")}
+    if "pessoal" not in columns:
+        connection.execute(
+            "ALTER TABLE contato ADD COLUMN pessoal INTEGER NOT NULL DEFAULT 0 "
+            "CHECK (pessoal IN (0, 1))"
+        )
+
+
 def _reset_legacy_approvals(connection: sqlite3.Connection) -> None:
     """Uma vez, exige revisão humana para todo aprovado anterior à cópia confiável."""
     marker = "legacy_approved_reset_v1"
@@ -348,6 +359,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE rascunho_migrado RENAME TO rascunho")
         connection.execute("PRAGMA foreign_keys = ON")
     _ensure_approval_columns(connection)
+    _ensure_contact_columns(connection)
     connection.commit()
     _reset_legacy_approvals(connection)
 

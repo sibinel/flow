@@ -82,6 +82,15 @@ def contact_for(connection: sqlite3.Connection, kind: str, value: str) -> tuple[
     return int(created), False
 
 
+def is_personal(connection: sqlite3.Connection, contact_id: int) -> bool:
+    """Contato marcado como pessoal não entra no repositório."""
+    row = connection.execute(
+        "SELECT pessoal FROM contato WHERE id = ?",
+        (contact_id,),
+    ).fetchone()
+    return row is not None and bool(row["pessoal"])
+
+
 def open_entry(
     connection: sqlite3.Connection,
     *,
@@ -95,11 +104,13 @@ def open_entry(
     account: str,
     media_failed: bool = False,
 ) -> int | None:
-    """Grava a entrada. Id já visto nesta conta devolve None. Contato sem cliente fica pendente."""
+    """Grava a entrada. Id já visto ou contato pessoal devolve None. Contato sem cliente fica pendente."""
     stored_id = scoped_message_id(kind, value, message_id)
     if already_stored(connection, kind, account, stored_id, value):
         return None
     contact_id, known = contact_for(connection, kind, value)
+    if is_personal(connection, contact_id):
+        return None
     reasons: list[str] = []
     if not known:
         reasons.append("contato novo")
