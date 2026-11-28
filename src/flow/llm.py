@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from flow.store import search_trechos_do_cliente
+from flow.store import search_trechos_do_cliente, search_trechos_relevantes
 
 CHAT_URL = "https://api.openai.com/v1/chat/completions"
 MODEL = "gpt-4o-mini"
@@ -171,11 +171,17 @@ def _draft(
     message: str,
     query: str,
 ) -> dict:
-    rows = search_trechos_do_cliente(connection, client_id, query)
+    if task == "rascunho":
+        # O rascunho busca por qualquer palavra; a busca por tema exige todas.
+        rows = search_trechos_relevantes(connection, client_id, query)
+    else:
+        rows = search_trechos_do_cliente(connection, client_id, query)
+    current = (message or "").strip()
     return {
         "tarefa": task,
         "mensagem": message,
-        "trechos": [row["texto"] for row in rows],
+        # A mensagem atual já vai em "mensagem"; o trecho dela não se repete.
+        "trechos": [row["texto"] for row in rows if row["texto"].strip() != current],
     }
 
 

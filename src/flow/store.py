@@ -230,6 +230,107 @@ def _ensure_contact_columns(connection: sqlite3.Connection) -> None:
         )
 
 
+def add_trecho(
+    connection: sqlite3.Connection,
+    client_id: int | None,
+    entry_id: int,
+    canal: str | None,
+    quando: str | None,
+    texto: str | None,
+) -> bool:
+    """Indexa um texto do cliente. O mesmo texto da mesma entrada e instante não repete."""
+    body = (texto or "").strip()
+    if client_id is None or not body:
+        return False
+    when = quando or ""
+    changed = connection.execute(
+        """
+        INSERT INTO trecho (cliente_id, entrada_id, canal, quando, texto)
+        SELECT ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM trecho WHERE entrada_id = ? AND quando = ? AND texto = ?
+        )
+        """,
+        (int(client_id), int(entry_id), canal or "", when, body, int(entry_id), when, body),
+    )
+    return changed.rowcount == 1
+
+
+def add_entry_trecho(connection: sqlite3.Connection, entry_id: int) -> bool:
+    """O texto recebido entra no índice do cliente a que a entrada foi arquivada."""
+    row = connection.execute(
+        """
+        SELECT entrada.cliente_id, entrada.recebido_em, entrada.texto,
+               COALESCE(entrada.canal, contato.tipo) AS canal
+        FROM entrada
+        JOIN contato ON contato.id = entrada.contato_id
+        WHERE entrada.id = ? AND entrada.estado = 'arquivada'
+        """,
+        (entry_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    return add_trecho(
+        connection, row["cliente_id"], entry_id, row["canal"], row["recebido_em"], row["texto"]
+    )
+
+
+def add_sent_trecho(connection: sqlite3.Connection, draft_id: int, sent_at: str) -> bool:
+    """O texto enviado entra no índice do cliente aprovado para o envio."""
+    row = connection.execute(
+        """
+        SELECT rascunho.entrada_id,
+               COALESCE(rascunho.texto_aprovado, rascunho.texto) AS texto,
+               COALESCE(rascunho.canal_aprovado, contato.tipo) AS canal,
+               COALESCE(rascunho.cliente_entrada_aprovado, entrada.cliente_id) AS cliente
+        FROM rascunho
+        JOIN entrada ON entrada.id = rascunho.entrada_id
+        JOIN contato ON contato.id = entrada.contato_id
+        WHERE rascunho.id = ?
+        """,
+        (draft_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    return add_trecho(
+        connection, row["cliente"], row["entrada_id"], row["canal"], sent_at, row["texto"]
+    )
+
+
+def _backfill_trechos(connection: sqlite3.Connection) -> None:
+    """Uma vez, indexa o que já foi arquivado e o que já foi enviado."""
+    marker = "trecho_backfill_v1"
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        found = connection.execute(
+            "SELECT 1 FROM store_meta WHERE key = ?",
+            (marker,),
+        ).fetchone()
+        if found is None:
+            archived = [
+                int(row["id"])
+                for row in connection.execute(
+                    "SELECT id FROM entrada WHERE estado = 'arquivada' "
+                    "AND cliente_id IS NOT NULL ORDER BY id"
+                )
+            ]
+            for entry_id in archived:
+                add_entry_trecho(connection, entry_id)
+            sent = connection.execute(
+                "SELECT rascunho_id, enviado_em FROM envio ORDER BY id"
+            ).fetchall()
+            for row in sent:
+                add_sent_trecho(connection, int(row["rascunho_id"]), str(row["enviado_em"]))
+            connection.execute(
+                "INSERT INTO store_meta (key, value) VALUES (?, 'done')",
+                (marker,),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 def _reset_legacy_approvals(connection: sqlite3.Connection) -> None:
     """Uma vez, exige revisão humana para todo aprovado anterior à cópia confiável."""
     marker = "legacy_approved_reset_v1"
@@ -362,6 +463,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
     _ensure_contact_columns(connection)
     connection.commit()
     _reset_legacy_approvals(connection)
+    _backfill_trechos(connection)
 
 
 _DEMO_CLIENTS = (
@@ -505,5 +607,40 @@ def search_trechos_do_cliente(
             ORDER BY trecho.id
             """,
             (" ".join(tokens), client_id),
+        )
+    )
+
+
+def search_trechos_relevantes(
+    connection: sqlite3.Connection,
+    client_id: int,
+    text: str,
+    limit: int = 5,
+) -> list[sqlite3.Row]:
+    """Contexto do rascunho: qualquer palavra relevante, do mais ao menos relevante.
+
+    Só trechos daquele cliente. O próprio texto da mensagem fica fora.
+    """
+    words = dict.fromkeys(
+        token.casefold()
+        for token in re.findall(r"\w+", text or "", flags=re.UNICODE)
+        if len(token) >= 3
+    )
+    if client_id <= 0 or not words or limit <= 0:
+        return []
+    query = " OR ".join(f'"{word}"' for word in words)
+    return list(
+        connection.execute(
+            """
+            SELECT trecho.id, trecho.cliente_id, trecho.entrada_id,
+                   trecho.canal, trecho.quando, trecho.texto
+            FROM trecho_fts
+            JOIN trecho ON trecho.id = trecho_fts.rowid
+            WHERE trecho_fts MATCH ? AND trecho.cliente_id = ?
+              AND trim(trecho.texto) != ?
+            ORDER BY bm25(trecho_fts), trecho.id
+            LIMIT ?
+            """,
+            (query, client_id, (text or "").strip(), int(limit)),
         )
     )

@@ -21,7 +21,7 @@ from flow.paths import ensure_user_data, whatsapp_session
 from flow.send import SmtpSender, load_smtp_target
 from flow.whatsapp import WhatsAppReader, WhatsAppSender, commit_cursor, pair, session_ready
 from flow.queue import RecordModel
-from flow.store import database_file, open_database
+from flow.store import add_entry_trecho, database_file, open_database
 
 _STOPPED = "Leitura e envio de WhatsApp estão parados."
 
@@ -351,6 +351,7 @@ class Controller(QObject):
             """,
             (client_id, entry_id),
         )
+        add_entry_trecho(self._db, entry_id)
         self._db.commit()
         self._reload()
         return True

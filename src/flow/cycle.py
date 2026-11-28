@@ -12,6 +12,7 @@ from pathlib import Path
 from flow.classify import Classifier, ReadTool
 from flow.llm import CloudLLM, load_model_key
 from flow.notice import publish_notice
+from flow.store import add_sent_trecho
 from flow.whatsapp import commit_cursor, discard_cursor
 from flow.when import parse_received
 
@@ -268,6 +269,7 @@ class DayCycle:
                     "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
                     (draft_id,),
                 )
+                add_sent_trecho(self._db, draft_id, sent_at)
             sent.append(draft_id)
         return sent
 

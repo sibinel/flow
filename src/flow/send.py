@@ -11,6 +11,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from flow.mail import _number, _read_mail_file, verified_context
+from flow.store import add_sent_trecho
 
 
 class SendTool:
@@ -134,6 +135,7 @@ def record_delivery(connection: sqlite3.Connection, draft_id: int, channel: str)
         "UPDATE rascunho SET estado = 'enviado' WHERE id = ?",
         (draft_id,),
     )
+    add_sent_trecho(connection, draft_id, sent_at)
     connection.commit()
 
 
